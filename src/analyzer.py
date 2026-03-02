@@ -544,9 +544,14 @@ class GeminiAnalyzer:
 
     @staticmethod
     def _extra_litellm_params(model: str, config: Config) -> dict:
-        """Build extra litellm params (api_base, headers) for OpenAI-compatible models."""
+        """Build extra litellm params (api_base, headers) for models."""
         params: Dict[str, Any] = {}
-        if not model.startswith("gemini/") and not model.startswith("anthropic/") and not model.startswith("vertex_ai/"):
+        if model.startswith("anthropic/"):
+            # Anthropic models: support custom base URL via ANTHROPIC_BASE_URL
+            if config.anthropic_base_url:
+                params["api_base"] = config.anthropic_base_url
+        elif not model.startswith("gemini/") and not model.startswith("vertex_ai/"):
+            # OpenAI-compatible models
             if config.openai_base_url:
                 params["api_base"] = config.openai_base_url
             if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
