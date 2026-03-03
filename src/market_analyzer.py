@@ -303,7 +303,7 @@ class MarketAnalyzer:
                 'max_output_tokens': 2048,
             }
             
-            review = self.analyzer._call_litellm(prompt, generation_config)
+            review = self.analyzer._call_openai(prompt, generation_config)
             
             if review:
                 logger.info(f"[大盘] 复盘报告生成成功，长度: {len(review)} 字符")

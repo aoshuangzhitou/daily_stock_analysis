@@ -12,8 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import litellm
-from litellm import Router
+from openai import OpenAI
 
 from src.config import get_config
 
@@ -96,91 +95,56 @@ def get_thinking_extra_body(model: str) -> Optional[dict]:
 # ============================================================
 
 class LLMToolAdapter:
-    """Unified adapter for tool-calling via LiteLLM.
+    """Unified adapter for tool-calling via OpenAI SDK.
 
-    Supports all providers (Gemini, Anthropic, OpenAI, DeepSeek, etc.) through
-    a single litellm.completion() interface with optional Router for multi-key
-    load balancing.
+    Uses OpenAI SDK directly to call OpenAI-compatible APIs.
     """
 
     def __init__(self, config=None):
         config = config or get_config()
         self._config = config
-        self._router = None          # litellm Router (multi-key primary model)
-        self._litellm_available = False
-        self._init_litellm()
+        self._openai_available = False
+        self._init_openai()
 
-    def _get_api_keys_for_model(self, model: str) -> List[str]:
-        """Return API keys for the given litellm model based on provider prefix."""
-        config = self._config
-        if model.startswith("gemini/") or model.startswith("vertex_ai/"):
-            return [k for k in config.gemini_api_keys if k and len(k) >= 8]
-        if model.startswith("anthropic/"):
-            return [k for k in config.anthropic_api_keys if k and len(k) >= 8]
-        # openai/, deepseek/, or any other provider uses openai_api_keys
-        return [k for k in config.openai_api_keys if k and len(k) >= 8]
+    def _get_openai_key(self) -> Optional[str]:
+        """Return the first available OpenAI API key."""
+        keys = [k for k in self._config.openai_api_keys if k and len(k) >= 8]
+        return keys[0] if keys else None
 
-    def _extra_litellm_params(self, model: str) -> dict:
-        """Build extra litellm params (api_base, custom headers) for a model."""
-        config = self._config
-        params: Dict[str, Any] = {}
-        if not model.startswith("gemini/") and not model.startswith("anthropic/") and not model.startswith("vertex_ai/"):
-            if config.openai_base_url:
-                params["api_base"] = config.openai_base_url
-            if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-                params["extra_headers"] = {"APP-Code": "GPIJ3886"}
-        return params
+    def _get_openai_client_kwargs(self) -> Dict[str, Any]:
+        """Build kwargs for OpenAI client initialization."""
+        kwargs: Dict[str, Any] = {}
+        if self._config.openai_base_url:
+            kwargs["base_url"] = self._config.openai_base_url
+        if self._config.openai_base_url and "aihubmix.com" in self._config.openai_base_url:
+            kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
+        return kwargs
 
-    def _init_litellm(self) -> None:
-        """Initialize litellm Router for multi-key, or flag single-key availability."""
+    def _init_openai(self) -> None:
+        """Initialize OpenAI client availability check."""
         config = self._config
-        litellm_model = config.litellm_model
-        if not litellm_model:
-            logger.warning("Agent LLM: LITELLM_MODEL not configured")
+
+        # Check for OpenAI API keys and base_url
+        if not self._get_openai_key():
+            logger.warning("Agent LLM: No OPENAI_API_KEYS configured")
             return
 
-        keys = self._get_api_keys_for_model(litellm_model)
-        if not keys:
-            logger.warning(f"Agent LLM: No API keys found for model {litellm_model}")
+        if not config.openai_base_url:
+            logger.warning("Agent LLM: No OPENAI_BASE_URL configured")
             return
 
-        self._litellm_available = True
-
-        if len(keys) > 1:
-            extra_params = self._extra_litellm_params(litellm_model)
-            model_list = [
-                {
-                    "model_name": litellm_model,
-                    "litellm_params": {
-                        "model": litellm_model,
-                        "api_key": k,
-                        **extra_params,
-                    },
-                }
-                for k in keys
-            ]
-            self._router = Router(
-                model_list=model_list,
-                routing_strategy="simple-shuffle",
-                num_retries=2,
-            )
-            models_in_router = list(dict.fromkeys(m["litellm_params"]["model"] for m in model_list))
-            logger.info(f"Agent LLM: Router initialized with {len(keys)} keys for {litellm_model} (models: {models_in_router})")
-        else:
-            logger.info(f"Agent LLM: litellm initialized (model={litellm_model})")
+        self._openai_available = True
+        logger.info(f"Agent LLM: OpenAI SDK initialized (base_url={config.openai_base_url})")
 
     @property
     def is_available(self) -> bool:
-        """True if litellm is configured and at least one API key is present."""
-        return self._router is not None or self._litellm_available
+        """True if OpenAI SDK is configured and at least one API key is present."""
+        return self._openai_available
 
     @property
     def primary_provider(self) -> str:
-        """Provider name extracted from litellm_model prefix."""
-        model = self._config.litellm_model or ""
-        if "/" in model:
-            return model.split("/")[0]
-        return model or "none"
+        """Provider name (always 'openai' for OpenAI SDK)."""
+        return "openai"
 
     # ============================================================
     # Unified call
@@ -197,20 +161,34 @@ class LLMToolAdapter:
         Args:
             messages: Conversation history in provider-neutral format:
                       [{"role": "system"/"user"/"assistant"/"tool", "content": ...}, ...]
-            tools: OpenAI-format tool declarations; litellm converts to each provider's format.
+            tools: OpenAI-format tool declarations.
             provider: Ignored (kept for backward compatibility).
 
         Returns:
             LLMResponse with either content (final answer) or tool_calls.
         """
         config = self._config
-        models_to_try = [config.litellm_model] + (config.litellm_fallback_models or [])
-        models_to_try = [m for m in models_to_try if m]
+
+        # Get primary model and fallback models
+        primary_model = config.openai_model
+        models_to_try = [primary_model] if primary_model else []
+
+        # Add legacy fallback models from config for backward compatibility
+        if config.litellm_fallback_models:
+            for m in config.litellm_fallback_models:
+                model_name = m.split("/")[-1] if "/" in m else m
+                if model_name not in models_to_try:
+                    models_to_try.append(model_name)
+
+        if not models_to_try:
+            error_msg = "No OpenAI model configured (OPENAI_MODEL)"
+            logger.error(error_msg)
+            return LLMResponse(content=error_msg, provider="error")
 
         last_error = None
         for model in models_to_try:
             try:
-                return self._call_litellm_model(messages, tools, model)
+                return self._call_openai_model(messages, tools, model)
             except Exception as e:
                 logger.warning(f"Agent LLM call failed with {model}: {e}")
                 last_error = e
@@ -220,22 +198,22 @@ class LLMToolAdapter:
         logger.error(error_msg)
         return LLMResponse(content=error_msg, provider="error")
 
-    def _call_litellm_model(
+    def _call_openai_model(
         self,
         messages: List[Dict[str, Any]],
         tools: List[dict],
         model: str,
     ) -> LLMResponse:
-        """Call a specific litellm model with OpenAI-format messages and tools."""
+        """Call OpenAI SDK with OpenAI-format messages and tools."""
         openai_messages = self._convert_messages(messages)
 
         # Use short model name (without provider prefix) for thinking model lookup
         model_short = model.split("/")[-1] if "/" in model else model
 
         call_kwargs: Dict[str, Any] = {
-            "model": model,
+            "model": model_short,
             "messages": openai_messages,
-            "temperature": self._get_temperature(model),
+            "temperature": self._config.openai_temperature,
         }
 
         extra = get_thinking_extra_body(model_short)
@@ -245,26 +223,19 @@ class LLMToolAdapter:
         if tools:
             call_kwargs["tools"] = tools
 
-        # Use Router for primary model (multi-key), direct litellm for others
-        if self._router and model == self._config.litellm_model:
-            response = self._router.completion(**call_kwargs)
-        else:
-            keys = self._get_api_keys_for_model(model)
-            if keys:
-                call_kwargs["api_key"] = keys[0]
-            call_kwargs.update(self._extra_litellm_params(model))
-            response = litellm.completion(**call_kwargs)
+        api_key = self._get_openai_key()
+        if not api_key:
+            raise ValueError("No OpenAI API key configured")
 
-        return self._parse_litellm_response(response, model)
+        client_kwargs = self._get_openai_client_kwargs()
+        client = OpenAI(api_key=api_key, **client_kwargs)
+
+        response = client.chat.completions.create(**call_kwargs)
+        return self._parse_openai_response(response, model_short)
 
     def _get_temperature(self, model: str) -> float:
-        """Return temperature from config based on provider prefix."""
-        config = self._config
-        if model.startswith("gemini/") or model.startswith("vertex_ai/"):
-            return config.gemini_temperature
-        if model.startswith("anthropic/"):
-            return config.anthropic_temperature
-        return config.openai_temperature
+        """Return temperature from config (always use openai_temperature now)."""
+        return self._config.openai_temperature
 
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert internal message format to OpenAI-compatible format for litellm."""
@@ -306,8 +277,8 @@ class LLMToolAdapter:
                 })
         return openai_messages
 
-    def _parse_litellm_response(self, response: Any, model: str) -> LLMResponse:
-        """Parse litellm OpenAI-compatible response into LLMResponse."""
+    def _parse_openai_response(self, response: Any, model: str) -> LLMResponse:
+        """Parse OpenAI SDK response into LLMResponse."""
         choice = response.choices[0]
         tool_calls: List[ToolCall] = []
         text_content = choice.message.content
@@ -323,7 +294,7 @@ class LLMToolAdapter:
                     except json.JSONDecodeError:
                         args = {"raw": tc.function.arguments}
 
-                # Extract thought_signature: stored in provider_specific_fields (Gemini 3 via LiteLLM proxy)
+                # Extract thought_signature: stored in provider_specific_fields if available
                 psf = getattr(tc, "provider_specific_fields", None)
                 if psf is not None:
                     sig = psf.get("thought_signature") if isinstance(psf, dict) else getattr(psf, "thought_signature", None)
@@ -349,12 +320,11 @@ class LLMToolAdapter:
                 "total_tokens": response.usage.total_tokens,
             }
 
-        provider_name = model.split("/")[0] if "/" in model else model
         return LLMResponse(
             content=text_content,
             tool_calls=tool_calls,
             reasoning_content=reasoning_content,
             usage=usage,
-            provider=provider_name,
+            provider="openai",
             raw=response,
         )

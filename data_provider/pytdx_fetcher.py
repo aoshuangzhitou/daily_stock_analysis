@@ -200,6 +200,12 @@ class PytdxFetcher(BaseFetcher):
                 logger.debug("Pytdx 连接已断开")
             except Exception as e:
                 logger.warning(f"Pytdx 断开连接时出错: {e}")
+            # Explicitly close the socket to prevent ResourceWarning
+            try:
+                if hasattr(api, 'client') and api.client:
+                    api.client.close()
+            except Exception:
+                pass
     
     def _get_market_code(self, stock_code: str) -> Tuple[int, str]:
         """

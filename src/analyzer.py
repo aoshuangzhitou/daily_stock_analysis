@@ -16,9 +16,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 
-import litellm
 from json_repair import repair_json
-from litellm import Router
+from openai import OpenAI
 
 from src.agent.llm_adapter import get_thinking_extra_body
 from src.config import Config, get_config
@@ -522,81 +521,54 @@ class GeminiAnalyzer:
 5. **风险优先级**：舆情中的风险点要醒目标出"""
 
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize LLM Analyzer via LiteLLM.
+        """Initialize LLM Analyzer via OpenAI SDK.
 
         Args:
             api_key: Ignored (kept for backward compatibility). Keys are loaded from config.
         """
-        self._router = None
-        self._litellm_available = False
-        self._init_litellm()
-        if not self._litellm_available:
-            logger.warning("No LLM configured (LITELLM_MODEL / API keys), AI analysis will be unavailable")
+        self._openai_available = False
+        self._init_openai()
+        if not self._openai_available:
+            logger.warning("No LLM configured (OPENAI_MODEL / API keys), AI analysis will be unavailable")
 
     @staticmethod
-    def _get_api_keys_for_model(model: str, config: Config) -> List[str]:
-        """Return API keys for a litellm model based on provider prefix."""
-        if model.startswith("gemini/") or model.startswith("vertex_ai/"):
-            return [k for k in config.gemini_api_keys if k and len(k) >= 8]
-        if model.startswith("anthropic/"):
-            return [k for k in config.anthropic_api_keys if k and len(k) >= 8]
-        return [k for k in config.openai_api_keys if k and len(k) >= 8]
+    def _get_openai_key(config: Config) -> Optional[str]:
+        """Return the first available OpenAI API key."""
+        keys = [k for k in config.openai_api_keys if k and len(k) >= 8]
+        return keys[0] if keys else None
 
     @staticmethod
-    def _extra_litellm_params(model: str, config: Config) -> dict:
-        """Build extra litellm params (api_base, headers) for OpenAI-compatible models."""
-        params: Dict[str, Any] = {}
-        if not model.startswith("gemini/") and not model.startswith("anthropic/") and not model.startswith("vertex_ai/"):
-            if config.openai_base_url:
-                params["api_base"] = config.openai_base_url
-            if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-                params["extra_headers"] = {"APP-Code": "GPIJ3886"}
-        return params
+    def _get_openai_client_kwargs(config: Config) -> Dict[str, Any]:
+        """Build kwargs for OpenAI client initialization."""
+        kwargs: Dict[str, Any] = {}
+        if config.openai_base_url:
+            kwargs["base_url"] = config.openai_base_url
+        if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
+            kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
+        return kwargs
 
-    def _init_litellm(self) -> None:
-        """Initialize litellm Router (multi-key) or flag single-key availability."""
+    def _init_openai(self) -> None:
+        """Initialize OpenAI client availability check."""
         config = get_config()
-        litellm_model = config.litellm_model
-        if not litellm_model:
-            logger.warning("Analyzer LLM: LITELLM_MODEL not configured")
+
+        # Check for OpenAI API keys and base_url
+        if not self._get_openai_key(config):
+            logger.warning("Analyzer LLM: No OPENAI_API_KEYS configured")
             return
 
-        keys = self._get_api_keys_for_model(litellm_model, config)
-        if not keys:
-            logger.warning(f"Analyzer LLM: No API keys found for model {litellm_model}")
+        if not config.openai_base_url:
+            logger.warning("Analyzer LLM: No OPENAI_BASE_URL configured")
             return
 
-        self._litellm_available = True
-
-        if len(keys) > 1:
-            extra_params = self._extra_litellm_params(litellm_model, config)
-            model_list = [
-                {
-                    "model_name": litellm_model,
-                    "litellm_params": {
-                        "model": litellm_model,
-                        "api_key": k,
-                        **extra_params,
-                    },
-                }
-                for k in keys
-            ]
-            self._router = Router(
-                model_list=model_list,
-                routing_strategy="simple-shuffle",
-                num_retries=2,
-            )
-            models_in_router = list(dict.fromkeys(m["litellm_params"]["model"] for m in model_list))
-            logger.info(f"Analyzer LLM: Router initialized with {len(keys)} keys for {litellm_model} (models: {models_in_router})")
-        else:
-            logger.info(f"Analyzer LLM: litellm initialized (model={litellm_model})")
+        self._openai_available = True
+        logger.info(f"Analyzer LLM: OpenAI SDK initialized (base_url={config.openai_base_url})")
 
     def is_available(self) -> bool:
-        """Check if LiteLLM is properly configured with at least one API key."""
-        return self._router is not None or self._litellm_available
+        """Check if OpenAI SDK is properly configured with at least one API key."""
+        return self._openai_available
 
-    def _call_litellm(self, prompt: str, generation_config: dict) -> str:
-        """Call LLM via litellm with fallback across configured models.
+    def _call_openai(self, prompt: str, generation_config: dict) -> str:
+        """Call LLM via OpenAI SDK with fallback across configured models.
 
         Args:
             prompt: User prompt text.
@@ -613,19 +585,34 @@ class GeminiAnalyzer:
         )
         temperature = generation_config.get('temperature', 0.7)
 
-        models_to_try = [config.litellm_model] + (config.litellm_fallback_models or [])
-        models_to_try = [m for m in models_to_try if m]
+        # Get primary model and fallback models
+        primary_model = config.openai_model
+        models_to_try = [primary_model] if primary_model else []
+
+        # Add legacy fallback models from config for backward compatibility
+        if config.litellm_fallback_models:
+            # Strip provider prefixes if present (e.g., "openai/gpt-4o" -> "gpt-4o")
+            for m in config.litellm_fallback_models:
+                model_name = m.split("/")[-1] if "/" in m else m
+                if model_name not in models_to_try:
+                    models_to_try.append(model_name)
+
+        if not models_to_try:
+            raise ValueError("No OpenAI model configured (OPENAI_MODEL)")
+
+        api_key = self._get_openai_key(config)
+        if not api_key:
+            raise ValueError("No OpenAI API key configured")
+
+        client_kwargs = self._get_openai_client_kwargs(config)
+        client = OpenAI(api_key=api_key, **client_kwargs)
 
         last_error = None
         for model in models_to_try:
-            keys = self._get_api_keys_for_model(model, config)
-            if not keys:
-                logger.debug(f"[LiteLLM] Skipping {model}: no API keys")
-                continue
             try:
                 model_short = model.split("/")[-1] if "/" in model else model
                 call_kwargs: Dict[str, Any] = {
-                    "model": model,
+                    "model": model_short,
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
@@ -637,19 +624,14 @@ class GeminiAnalyzer:
                 if extra:
                     call_kwargs["extra_body"] = extra
 
-                if self._router and model == config.litellm_model:
-                    response = self._router.completion(**call_kwargs)
-                else:
-                    call_kwargs["api_key"] = keys[0]
-                    call_kwargs.update(self._extra_litellm_params(model, config))
-                    response = litellm.completion(**call_kwargs)
+                response = client.chat.completions.create(**call_kwargs)
 
                 if response and response.choices and response.choices[0].message.content:
                     return response.choices[0].message.content
                 raise ValueError("LLM returned empty response")
 
             except Exception as e:
-                logger.warning(f"[LiteLLM] {model} failed: {e}")
+                logger.warning(f"[OpenAI] {model} failed: {e}")
                 last_error = e
                 continue
 
@@ -715,7 +697,7 @@ class GeminiAnalyzer:
             prompt = self._format_prompt(context, name, news_context)
             
             config = get_config()
-            model_name = config.litellm_model or "unknown"
+            model_name = config.openai_model or "unknown"
             logger.info(f"========== AI 分析 {name}({code}) ==========")
             logger.info(f"[LLM配置] 模型: {model_name}")
             logger.info(f"[LLM配置] Prompt 长度: {len(prompt)} 字符")
@@ -734,9 +716,9 @@ class GeminiAnalyzer:
 
             logger.info(f"[LLM调用] 开始调用 {model_name}...")
 
-            # 使用 litellm 调用
+            # 使用 OpenAI SDK 调用
             start_time = time.time()
-            response_text = self._call_litellm(prompt, generation_config)
+            response_text = self._call_openai(prompt, generation_config)
             elapsed = time.time() - start_time
 
             # 记录响应信息

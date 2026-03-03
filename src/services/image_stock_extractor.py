@@ -14,9 +14,9 @@ import base64
 import json
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import litellm
+from openai import OpenAI
 
 from src.config import Config, get_config
 
@@ -122,52 +122,51 @@ def _parse_codes_from_text(text: str) -> List[str]:
 
 
 def _resolve_vision_model() -> str:
-    """Determine the litellm model to use for vision, with gemini-3 downgrade."""
+    """Determine the model to use for vision.
+
+    Uses openai_vision_model if configured, otherwise falls back to openai_model.
+    """
     cfg = get_config()
-    # Prefer explicit vision model, then primary litellm model
-    model = (cfg.openai_vision_model or cfg.litellm_model or "").strip()
-    if not model:
-        # Fallback: infer from available keys
-        if cfg.gemini_api_keys:
-            model = "gemini/gemini-2.0-flash"
-        elif cfg.anthropic_api_keys:
-            model = f"anthropic/{cfg.anthropic_model or 'claude-3-5-sonnet-20241022'}"
-        elif cfg.openai_api_keys:
-            model = f"openai/{cfg.openai_model or 'gpt-4o-mini'}"
-        else:
-            return ""
-    # Gemini 3 does not support vision; downgrade to gemini-2.0-flash
-    if "gemini-3" in model:
-        model = "gemini/gemini-2.0-flash"
+    # Prefer explicit vision model, then primary openai model
+    model = (cfg.openai_vision_model or cfg.openai_model or "").strip()
     return model
 
 
-def _get_api_key_for_model(model: str, cfg: Config) -> Optional[str]:
-    """Return the first available API key for the given litellm model."""
-    if model.startswith("gemini/") or model.startswith("vertex_ai/"):
-        keys = [k for k in cfg.gemini_api_keys if k and len(k) >= 8]
-    elif model.startswith("anthropic/"):
-        keys = [k for k in cfg.anthropic_api_keys if k and len(k) >= 8]
-    else:
-        keys = [k for k in cfg.openai_api_keys if k and len(k) >= 8]
+def _get_openai_key(cfg: Config) -> Optional[str]:
+    """Return the first available OpenAI API key."""
+    keys = [k for k in cfg.openai_api_keys if k and len(k) >= 8]
     return keys[0] if keys else None
 
 
-def _call_litellm_vision(image_b64: str, mime_type: str) -> str:
-    """Extract stock codes from an image using litellm (all providers via OpenAI vision format)."""
+def _get_openai_client_kwargs(cfg: Config) -> Dict[str, Any]:
+    """Build kwargs for OpenAI client initialization."""
+    kwargs: Dict[str, Any] = {}
+    if cfg.openai_base_url:
+        kwargs["base_url"] = cfg.openai_base_url
+    if cfg.openai_base_url and "aihubmix.com" in cfg.openai_base_url:
+        kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
+    return kwargs
+
+
+def _call_openai_vision(image_b64: str, mime_type: str) -> str:
+    """Extract stock codes from an image using OpenAI SDK."""
     cfg = get_config()
     model = _resolve_vision_model()
     if not model:
-        raise ValueError("未配置 Vision API。请设置 LITELLM_MODEL 或相关 API Key。")
+        raise ValueError("未配置 Vision API。请设置 OPENAI_VISION_MODEL 或 OPENAI_MODEL。")
 
-    api_key = _get_api_key_for_model(model, cfg)
+    api_key = _get_openai_key(cfg)
     if not api_key:
-        raise ValueError(f"No API key found for vision model {model}")
+        raise ValueError("No OpenAI API key configured")
 
     data_url = f"data:{mime_type};base64,{image_b64}"
-    call_kwargs: dict = {
-        "model": model,
-        "messages": [
+
+    client_kwargs = _get_openai_client_kwargs(cfg)
+    client = OpenAI(api_key=api_key, **client_kwargs)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
             {
                 "role": "user",
                 "content": [
@@ -176,21 +175,12 @@ def _call_litellm_vision(image_b64: str, mime_type: str) -> str:
                 ],
             }
         ],
-        "max_tokens": 1024,
-        "api_key": api_key,
-        "timeout": VISION_API_TIMEOUT,
-    }
-    # Add api_base and custom headers for OpenAI-compatible providers
-    if not model.startswith("gemini/") and not model.startswith("anthropic/") and not model.startswith("vertex_ai/"):
-        if cfg.openai_base_url:
-            call_kwargs["api_base"] = cfg.openai_base_url
-        if cfg.openai_base_url and "aihubmix.com" in cfg.openai_base_url:
-            call_kwargs["extra_headers"] = {"APP-Code": "GPIJ3886"}
-
-    response = litellm.completion(**call_kwargs)
+        max_tokens=1024,
+        timeout=VISION_API_TIMEOUT,
+    )
     if response and response.choices and response.choices[0].message.content:
         return response.choices[0].message.content
-    raise ValueError("LiteLLM vision returned empty response")
+    raise ValueError("Vision API returned empty response")
 
 
 def extract_stock_codes_from_image(
@@ -227,7 +217,7 @@ def extract_stock_codes_from_image(
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
     try:
-        raw = _call_litellm_vision(image_b64, mime_type)
+        raw = _call_openai_vision(image_b64, mime_type)
         codes = _parse_codes_from_text(raw)
         model = _resolve_vision_model()
         logger.info(
