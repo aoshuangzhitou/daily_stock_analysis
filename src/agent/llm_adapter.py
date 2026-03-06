@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-from src.config import get_config
+from src.config import get_config, get_api_keys_for_model, extra_litellm_params
 
 logger = logging.getLogger(__name__)
 

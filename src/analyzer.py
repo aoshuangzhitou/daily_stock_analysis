@@ -20,7 +20,7 @@ from json_repair import repair_json
 from openai import OpenAI
 
 from src.agent.llm_adapter import get_thinking_extra_body
-from src.config import Config, get_config
+from src.config import Config, get_config, get_api_keys_for_model, extra_litellm_params
 
 logger = logging.getLogger(__name__)
 
