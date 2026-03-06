@@ -310,7 +310,7 @@ class MarketAnalyzer:
                 # Inject structured data tables into LLM prose sections
                 return self._inject_data_into_review(review, overview)
             else:
-                logger.warning("[大盘] 大模型返回为空")
+                logger.warning("[大盘] 大模型返回为空，使用模板报告")
                 return self._generate_template_review(overview, news)
                 
         except Exception as e:
