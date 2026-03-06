@@ -805,7 +805,7 @@ class AkshareFetcher(BaseFetcher):
                 return None
             
             # 查找指定股票
-            row = df[df['代码'] == stock_code]
+            row = df[df['代码'].astype(str) == stock_code]
             if row.empty:
                 logger.warning(f"[API返回] 未找到股票 {stock_code} 的实时行情")
                 return None
@@ -1101,7 +1101,7 @@ class AkshareFetcher(BaseFetcher):
                 return None
             
             # 查找指定 ETF
-            row = df[df['代码'] == stock_code]
+            row = df[df['代码'].astype(str) == stock_code]
             if row.empty:
                 logger.warning(f"[API返回] 未找到 ETF {stock_code} 的实时行情")
                 return None
@@ -1176,7 +1176,7 @@ class AkshareFetcher(BaseFetcher):
             circuit_breaker.record_success(source_key)
             
             # 查找指定港股
-            row = df[df['代码'] == code]
+            row = df[df['代码'].astype(str) == code]
             if row.empty:
                 logger.warning(f"[API返回] 未找到港股 {code} 的实时行情")
                 return None
@@ -1349,7 +1349,7 @@ class AkshareFetcher(BaseFetcher):
             if df is not None and not df.empty:
                 for code, name in indices_map.items():
                     # 查找对应指数
-                    row = df[df['代码'] == code]
+                    row = df[df['代码'].astype(str) == code]
                     if row.empty:
                         # 尝试带前缀查找
                         row = df[df['代码'].str.contains(code)]
