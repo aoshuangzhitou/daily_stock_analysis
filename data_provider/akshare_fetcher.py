@@ -1151,7 +1151,7 @@ class AkshareFetcher(BaseFetcher):
             
             data_str = content[data_start+1:data_end]
             fields = data_str.split('~')
-            
+
             if len(fields) < 45:
                 failure_message = _build_realtime_failure_message(
                     source_name="腾讯",
@@ -1171,7 +1171,7 @@ class AkshareFetcher(BaseFetcher):
             
             # 腾讯数据字段顺序（完整）：
             # 1:名称 2:代码 3:最新价 4:昨收 5:今开 6:成交量(手) 7:外盘 8:内盘
-            # 9-28:买卖五档 30:时间戳 31:涨跌额 32:涨跌幅(%) 33:最高 34:最低 35:最低/成交量/成交额
+            # 9-28:买卖五档 30:时间戳 31:涨跌额 32:涨跌幅(%) 33:最高 34:最低 35:收盘/成交量/成交额
             # 36:成交量(手) 37:成交额(万) 38:换手率(%) 39:市盈率 43:振幅(%)
             # 44:流通市值(亿) 45:总市值(亿) 46:市净率 47:涨停价 48:跌停价 49:量比
             # 使用 realtime_types.py 中的统一转换函数
