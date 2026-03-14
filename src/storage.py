@@ -179,6 +179,31 @@ class NewsIntel(Base):
         return f"<NewsIntel(code={self.code}, title={self.title[:20]}...)>"
 
 
+class FundamentalSnapshot(Base):
+    """
+    基本面上下文快照（P0 write-only）。
+
+    仅用于写入，主链路不依赖读取该表，便于后续回测/画像扩展。
+    """
+    __tablename__ = 'fundamental_snapshot'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    query_id = Column(String(64), nullable=False, index=True)
+    code = Column(String(10), nullable=False, index=True)
+    payload = Column(Text, nullable=False)
+    source_chain = Column(Text)
+    coverage = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_fundamental_snapshot_query_code', 'query_id', 'code'),
+        Index('ix_fundamental_snapshot_created', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundamentalSnapshot(query_id={self.query_id}, code={self.code})>"
+
+
 class AnalysisHistory(Base):
     """
     分析结果历史记录模型
@@ -703,6 +728,43 @@ class DatabaseManager:
 
         return saved_count
 
+    def save_fundamental_snapshot(
+        self,
+        query_id: str,
+        code: str,
+        payload: Optional[Dict[str, Any]],
+        source_chain: Optional[Any] = None,
+        coverage: Optional[Any] = None,
+    ) -> int:
+        """
+        保存基本面快照（P0 write-only）。失败不抛异常，返回写入条数 0/1。
+        """
+        if not query_id or not code or payload is None:
+            return 0
+
+        with self.get_session() as session:
+            try:
+                session.add(
+                    FundamentalSnapshot(
+                        query_id=query_id,
+                        code=code,
+                        payload=self._safe_json_dumps(payload),
+                        source_chain=self._safe_json_dumps(source_chain or []),
+                        coverage=self._safe_json_dumps(coverage or {}),
+                    )
+                )
+                session.commit()
+                return 1
+            except Exception as e:
+                session.rollback()
+                logger.debug(
+                    "基本面快照写入失败（fail-open）: query_id=%s code=%s err=%s",
+                    query_id,
+                    code,
+                    e,
+                )
+                return 0
+
     def get_recent_news(self, code: str, days: int = 7, limit: int = 20) -> List[NewsIntel]:
         """
         获取指定股票最近 N 天的新闻情报
@@ -914,6 +976,31 @@ class DatabaseManager:
                 select(AnalysisHistory).where(AnalysisHistory.id == record_id)
             ).scalars().first()
             return result
+
+    def delete_analysis_history_records(self, record_ids: List[int]) -> int:
+        """
+        删除指定的分析历史记录。
+
+        同时清理依赖这些历史记录的回测结果，避免外键约束失败。
+
+        Args:
+            record_ids: 要删除的历史记录主键 ID 列表
+
+        Returns:
+            实际删除的历史记录数量
+        """
+        ids = sorted({int(record_id) for record_id in record_ids if record_id is not None})
+        if not ids:
+            return 0
+
+        with self.session_scope() as session:
+            session.execute(
+                delete(BacktestResult).where(BacktestResult.analysis_history_id.in_(ids))
+            )
+            result = session.execute(
+                delete(AnalysisHistory).where(AnalysisHistory.id.in_(ids))
+            )
+            return result.rowcount or 0
 
     def get_latest_analysis_by_query_id(self, query_id: str) -> Optional[AnalysisHistory]:
         """
