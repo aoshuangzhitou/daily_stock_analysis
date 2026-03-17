@@ -126,9 +126,23 @@ class SystemConfigServiceTestCase(unittest.TestCase):
                 {"key": "LITELLM_MODEL", "value": "gemini/gemini-2.5-flash"},
             ]
         )
-
         self.assertTrue(validation["valid"])
         self.assertEqual(validation["issues"], [])
+
+    def test_get_config_preserves_labeled_select_options_and_enum_validation(self) -> None:
+        payload = self.service.get_config(include_schema=True)
+        items = {item["key"]: item for item in payload["items"]}
+
+        agent_arch_schema = items["AGENT_ARCH"]["schema"]
+        self.assertEqual(agent_arch_schema["options"][0]["value"], "single")
+        self.assertEqual(agent_arch_schema["options"][1]["label"], "Multi Agent (Orchestrator)")
+        self.assertEqual(agent_arch_schema["validation"]["enum"], ["single", "multi"])
+
+    def test_validate_reports_invalid_select_option(self) -> None:
+        validation = self.service.validate(items=[{"key": "AGENT_ARCH", "value": "invalid-mode"}])
+
+        self.assertFalse(validation["valid"])
+        self.assertTrue(any(issue["code"] == "invalid_enum" for issue in validation["issues"]))
 
     @patch.object(
         Config,
@@ -214,8 +228,13 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(payload["resolved_protocol"], "openai")
         self.assertEqual(payload["resolved_model"], "openai/deepseek-chat")
 
+    @patch("src.agent.tools.data_tools.reset_fetcher_manager")
     @patch("src.search_service.reset_search_service")
-    def test_update_with_reload_resets_search_service_singleton(self, mock_reset_search_service) -> None:
+    def test_update_with_reload_resets_runtime_singletons(
+        self,
+        mock_reset_search_service,
+        mock_reset_fetcher_manager,
+    ) -> None:
         response = self.service.update(
             config_version=self.manager.get_config_version(),
             items=[{"key": "STOCK_LIST", "value": "600519"}],
@@ -224,6 +243,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
         self.assertTrue(response["success"])
         mock_reset_search_service.assert_called_once()
+        mock_reset_fetcher_manager.assert_called_once()
 
     def test_update_raises_conflict_for_stale_version(self) -> None:
         with self.assertRaises(ConfigConflictError):

@@ -36,6 +36,7 @@ from sqlalchemy import (
     Text,
     select,
     and_,
+    or_,
     delete,
     desc,
     func,
@@ -387,6 +388,205 @@ class BacktestSummary(Base):
             'eval_window_days',
             'engine_version',
             name='uix_backtest_summary_scope_code_window_version',
+        ),
+    )
+
+
+class PortfolioAccount(Base):
+    """Portfolio account metadata."""
+
+    __tablename__ = 'portfolio_accounts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(String(64), index=True)
+    name = Column(String(64), nullable=False)
+    broker = Column(String(64))
+    market = Column(String(8), nullable=False, default='cn', index=True)  # cn/hk/us
+    base_currency = Column(String(8), nullable=False, default='CNY')
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index('ix_portfolio_account_owner_active', 'owner_id', 'is_active'),
+    )
+
+
+class PortfolioTrade(Base):
+    """Executed trade events used as the source of truth for replay."""
+
+    __tablename__ = 'portfolio_trades'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    trade_uid = Column(String(128))
+    symbol = Column(String(16), nullable=False, index=True)
+    market = Column(String(8), nullable=False, default='cn')
+    currency = Column(String(8), nullable=False, default='CNY')
+    trade_date = Column(Date, nullable=False, index=True)
+    side = Column(String(8), nullable=False)  # buy/sell
+    quantity = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
+    fee = Column(Float, default=0.0)
+    tax = Column(Float, default=0.0)
+    note = Column(String(255))
+    dedup_hash = Column(String(64), index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('account_id', 'trade_uid', name='uix_portfolio_trade_uid'),
+        UniqueConstraint('account_id', 'dedup_hash', name='uix_portfolio_trade_dedup_hash'),
+        Index('ix_portfolio_trade_account_date', 'account_id', 'trade_date'),
+    )
+
+
+class PortfolioCashLedger(Base):
+    """Cash in/out events."""
+
+    __tablename__ = 'portfolio_cash_ledger'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    event_date = Column(Date, nullable=False, index=True)
+    direction = Column(String(8), nullable=False)  # in/out
+    amount = Column(Float, nullable=False)
+    currency = Column(String(8), nullable=False, default='CNY')
+    note = Column(String(255))
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_cash_account_date', 'account_id', 'event_date'),
+    )
+
+
+class PortfolioCorporateAction(Base):
+    """Corporate actions that impact cash or share quantity."""
+
+    __tablename__ = 'portfolio_corporate_actions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    market = Column(String(8), nullable=False, default='cn')
+    currency = Column(String(8), nullable=False, default='CNY')
+    effective_date = Column(Date, nullable=False, index=True)
+    action_type = Column(String(24), nullable=False)  # cash_dividend/split_adjustment
+    cash_dividend_per_share = Column(Float)
+    split_ratio = Column(Float)
+    note = Column(String(255))
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_ca_account_date', 'account_id', 'effective_date'),
+    )
+
+
+class PortfolioPosition(Base):
+    """Latest replayed position snapshot for each symbol in one account."""
+
+    __tablename__ = 'portfolio_positions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    cost_method = Column(String(8), nullable=False, default='fifo')
+    symbol = Column(String(16), nullable=False, index=True)
+    market = Column(String(8), nullable=False, default='cn')
+    currency = Column(String(8), nullable=False, default='CNY')
+    quantity = Column(Float, nullable=False, default=0.0)
+    avg_cost = Column(Float, nullable=False, default=0.0)
+    total_cost = Column(Float, nullable=False, default=0.0)
+    last_price = Column(Float, nullable=False, default=0.0)
+    market_value_base = Column(Float, nullable=False, default=0.0)
+    unrealized_pnl_base = Column(Float, nullable=False, default=0.0)
+    valuation_currency = Column(String(8), nullable=False, default='CNY')
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'account_id',
+            'symbol',
+            'market',
+            'currency',
+            'cost_method',
+            name='uix_portfolio_position_account_symbol_market_currency',
+        ),
+    )
+
+
+class PortfolioPositionLot(Base):
+    """Lot-level remaining quantities used by FIFO replay."""
+
+    __tablename__ = 'portfolio_position_lots'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    cost_method = Column(String(8), nullable=False, default='fifo')
+    symbol = Column(String(16), nullable=False, index=True)
+    market = Column(String(8), nullable=False, default='cn')
+    currency = Column(String(8), nullable=False, default='CNY')
+    open_date = Column(Date, nullable=False, index=True)
+    remaining_quantity = Column(Float, nullable=False, default=0.0)
+    unit_cost = Column(Float, nullable=False, default=0.0)
+    source_trade_id = Column(Integer, ForeignKey('portfolio_trades.id'))
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_lot_account_symbol', 'account_id', 'symbol'),
+    )
+
+
+class PortfolioDailySnapshot(Base):
+    """Daily account snapshot generated by read-time replay."""
+
+    __tablename__ = 'portfolio_daily_snapshots'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    cost_method = Column(String(8), nullable=False, default='fifo')  # fifo/avg
+    base_currency = Column(String(8), nullable=False, default='CNY')
+    total_cash = Column(Float, nullable=False, default=0.0)
+    total_market_value = Column(Float, nullable=False, default=0.0)
+    total_equity = Column(Float, nullable=False, default=0.0)
+    unrealized_pnl = Column(Float, nullable=False, default=0.0)
+    realized_pnl = Column(Float, nullable=False, default=0.0)
+    fee_total = Column(Float, nullable=False, default=0.0)
+    tax_total = Column(Float, nullable=False, default=0.0)
+    fx_stale = Column(Boolean, nullable=False, default=False)
+    payload = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'account_id',
+            'snapshot_date',
+            'cost_method',
+            name='uix_portfolio_snapshot_account_date_method',
+        ),
+    )
+
+
+class PortfolioFxRate(Base):
+    """Cached FX rates used for cross-currency portfolio conversion."""
+
+    __tablename__ = 'portfolio_fx_rates'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    from_currency = Column(String(8), nullable=False, index=True)
+    to_currency = Column(String(8), nullable=False, index=True)
+    rate_date = Column(Date, nullable=False, index=True)
+    rate = Column(Float, nullable=False)
+    source = Column(String(32), nullable=False, default='manual')
+    is_stale = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'from_currency',
+            'to_currency',
+            'rate_date',
+            name='uix_portfolio_fx_pair_date',
         ),
     )
 
@@ -764,6 +964,49 @@ class DatabaseManager:
                     e,
                 )
                 return 0
+
+    def get_latest_fundamental_snapshot(
+        self,
+        query_id: str,
+        code: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取指定 query_id + code 的最新基本面快照 payload。
+
+        读取失败或不存在时返回 None（fail-open）。
+        """
+        if not query_id or not code:
+            return None
+
+        with self.get_session() as session:
+            try:
+                row = session.execute(
+                    select(FundamentalSnapshot)
+                    .where(
+                        and_(
+                            FundamentalSnapshot.query_id == query_id,
+                            FundamentalSnapshot.code == code,
+                        )
+                    )
+                    .order_by(desc(FundamentalSnapshot.created_at))
+                    .limit(1)
+                ).scalar_one_or_none()
+            except Exception as e:
+                logger.debug(
+                    "基本面快照读取失败（fail-open）: query_id=%s code=%s err=%s",
+                    query_id,
+                    code,
+                    e,
+                )
+                return None
+
+            if row is None:
+                return None
+            try:
+                payload = json.loads(row.payload or "{}")
+                return payload if isinstance(payload, dict) else None
+            except Exception:
+                return None
 
     def get_recent_news(self, code: str, days: int = 7, limit: int = 20) -> List[NewsIntel]:
         """
@@ -1478,9 +1721,32 @@ class DatabaseManager:
             # 倒序返回，保证时间顺序
             return [{"role": msg.role, "content": msg.content} for msg in reversed(messages)]
 
-    def get_chat_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def conversation_session_exists(self, session_id: str) -> bool:
+        """Return True when at least one message exists for the given session."""
+        with self.session_scope() as session:
+            stmt = (
+                select(ConversationMessage.id)
+                .where(ConversationMessage.session_id == session_id)
+                .limit(1)
+            )
+            return session.execute(stmt).scalar() is not None
+
+    def get_chat_sessions(
+        self,
+        limit: int = 50,
+        session_prefix: Optional[str] = None,
+        extra_session_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """
         获取聊天会话列表（从 conversation_messages 聚合）
+
+        Args:
+            limit: Maximum number of sessions to return.
+            session_prefix: If provided, only return sessions whose session_id
+                starts with this prefix.  Used for per-user isolation (e.g.
+                ``"telegram_12345"``).
+            extra_session_ids: Optional exact session ids to include in
+                addition to the scoped prefix.
 
         Returns:
             按最近活跃时间倒序的会话列表，每条包含 session_id, title, message_count, last_active
@@ -1488,14 +1754,29 @@ class DatabaseManager:
         from sqlalchemy import func
 
         with self.session_scope() as session:
+            normalized_prefix = None
+            if session_prefix:
+                normalized_prefix = session_prefix if session_prefix.endswith(":") else f"{session_prefix}:"
+            exact_ids = [sid for sid in (extra_session_ids or []) if sid]
+
             # 聚合每个 session 的消息数和最后活跃时间
-            stmt = (
+            base = (
                 select(
                     ConversationMessage.session_id,
                     func.count(ConversationMessage.id).label("message_count"),
                     func.min(ConversationMessage.created_at).label("created_at"),
                     func.max(ConversationMessage.created_at).label("last_active"),
                 )
+            )
+            conditions = []
+            if normalized_prefix:
+                conditions.append(ConversationMessage.session_id.startswith(normalized_prefix))
+            if exact_ids:
+                conditions.append(ConversationMessage.session_id.in_(exact_ids))
+            if conditions:
+                base = base.where(or_(*conditions))
+            stmt = (
+                base
                 .group_by(ConversationMessage.session_id)
                 .order_by(desc(func.max(ConversationMessage.created_at)))
                 .limit(limit)
