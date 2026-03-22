@@ -182,8 +182,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.FORK_BRANCH }}
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Add Upstream Remote
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream ${{ env.UPSTREAM_BRANCH }}
 
       - name: Create Sync PR
         uses: repo-sync/pull-request@v2
