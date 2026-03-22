@@ -1,21 +1,18 @@
-# -*- coding: utf-8 -*-
-"""
-自动同步 Fork 与上游仓库
-
-功能：
-1. 每天自动检查上游仓库更新
-2. 自动合并到当前 fork 的 main 分支
-3. 支持手动触发同步
-4. 同步失败时发送通知
-
-配置要求：
-1. 在仓库 Settings -> Secrets -> Actions 中添加 PAT_TOKEN（Personal Access Token）
-   - 需要权限: repo, workflow
-2. 可选：配置飞书/钉钉 webhook 接收同步通知
-
-作者: Claude Code
-日期: 2026-03-22
-"""
+# 自动同步 Fork 与上游仓库
+#
+# 功能：
+# 1. 每天自动检查上游仓库更新
+# 2. 自动合并到当前 fork 的 main 分支
+# 3. 支持手动触发同步
+# 4. 同步失败时发送通知
+#
+# 配置要求：
+# 1. 在仓库 Settings -> Secrets -> Actions 中添加 PAT_TOKEN（Personal Access Token）
+#    - 需要权限: repo, workflow
+# 2. 可选：配置飞书/钉钉 webhook 接收同步通知
+#
+# 作者: Claude Code
+# 日期: 2026-03-22
 
 name: Sync Fork with Upstream
 
@@ -147,9 +144,6 @@ jobs:
           echo "仓库: ${{ github.repository }}"
           echo "上游: ${{ env.UPSTREAM_REPO }}"
           echo "时间: $(date)"
-
-          # 这里可以添加飞书/钉钉通知
-          # curl -X POST ${{ secrets.FEISHU_WEBHOOK }} ...
 
       # -------------------------------
       # 7. 冲突处理提示
