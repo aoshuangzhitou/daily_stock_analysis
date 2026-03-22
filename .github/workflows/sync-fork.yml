@@ -147,8 +147,23 @@ jobs:
             exit 0
           fi
 
+          # 检查分支间是否有差异
+          if git merge-base --is-ancestor ${{ env.FORK_BRANCH }} sync-upstream && \
+             git merge-base --is-ancestor sync-upstream ${{ env.FORK_BRANCH }}; then
+            echo "No commits between ${{ env.FORK_BRANCH }} and sync-upstream, no PR needed"
+            exit 0
+          fi
+
           gh pr create --repo ${{ github.repository }} \
             --title "Sync from upstream ${{ env.UPSTREAM_REPO }}" \
             --body "Auto-sync from upstream" \
             --base ${{ env.FORK_BRANCH }} \
-            --head sync-upstream
+            --head sync-upstream || {
+              ERROR_MSG=$?
+              # 如果错误是 "No commits between"，则视为正常退出
+              if gh pr create 2>&1 | grep -q "No commits between"; then
+                echo "No commits between branches, no PR needed"
+                exit 0
+              fi
+              exit $ERROR_MSG
+            }
