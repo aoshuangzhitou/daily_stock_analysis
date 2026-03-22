@@ -191,12 +191,18 @@ jobs:
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
           git fetch upstream ${{ env.UPSTREAM_BRANCH }}
 
+      - name: Create Sync Branch
+        run: |
+          # 创建同步分支并推送到 origin
+          git checkout -b sync-upstream upstream/${{ env.UPSTREAM_BRANCH }}
+          git push origin sync-upstream --force
+
       - name: Create Sync PR
         uses: repo-sync/pull-request@v2
         with:
-          source_branch: upstream/${{ env.UPSTREAM_BRANCH }}
+          source_branch: sync-upstream
           destination_branch: ${{ env.FORK_BRANCH }}
-          pr_title: "Sync from upstream ${{ env.UPSTREAM_REPO }}"
+          pr_title: "🔄 Sync from upstream ${{ env.UPSTREAM_REPO }}"
           pr_body: |
             自动同步上游仓库更新
 
