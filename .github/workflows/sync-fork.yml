@@ -51,12 +51,21 @@ jobs:
           echo "Upstream: $UPSTREAM_COMMIT"
           echo "Local: $LOCAL_COMMIT"
 
+          # 检查是否完全相同
           if [ "$UPSTREAM_COMMIT" = "$LOCAL_COMMIT" ]; then
-            echo "Already up to date"
+            echo "Already up to date (identical)"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 检查本地是否已包含上游所有提交（本地领先或同步）
+          if git merge-base --is-ancestor upstream/${{ env.UPSTREAM_BRANCH }} HEAD; then
+            echo "Local is ahead of or equal to upstream, no sync needed"
             echo "has_update=false" >> $GITHUB_OUTPUT
           else
-            echo "Updates found"
+            echo "Updates found (local is behind upstream)"
             echo "has_update=true" >> $GITHUB_OUTPUT
+            echo "Commits to sync:"
             git log --oneline HEAD..upstream/${{ env.UPSTREAM_BRANCH }} | head -20
           fi
 
