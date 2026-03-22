@@ -97,32 +97,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.FORK_BRANCH }}
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Setup GitHub CLI
+      - name: Setup Git and Create Branch
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
           git fetch upstream ${{ env.UPSTREAM_BRANCH }}
 
       - name: Create Sync Branch
         run: |
-          git checkout -b sync-upstream upstream/${{ env.UPSTREAM_BRANCH }}
+          # 强制创建并切换到新分支（基于 upstream）
+          git checkout -B sync-upstream upstream/${{ env.UPSTREAM_BRANCH }}
+          # 推送到 fork
           git push origin sync-upstream --force
+
+      - name: Wait for Branch Sync
+        run: |
+          # 等待 GitHub API 同步分支信息
+          for i in {1..5}; do
+            if git ls-remote origin refs/heads/sync-upstream | grep -q sync-upstream; then
+              echo "Branch sync-upstream is available on origin"
+              exit 0
+            fi
+            echo "Waiting for branch sync... ($i/5)"
+            sleep 2
+          done
+          echo "Warning: Branch may not be fully synced yet"
 
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          EXISTING_PR=$(gh pr list --head sync-upstream --base ${{ env.FORK_BRANCH }} --json number -q '.[0].number' 2>/dev/null || echo "")
+          EXISTING_PR=$(gh pr list --repo ${{ github.repository }} --head sync-upstream --base ${{ env.FORK_BRANCH }} --json number -q '.[0].number' 2>/dev/null || echo "")
 
           if [ -n "$EXISTING_PR" ]; then
             echo "PR #$EXISTING_PR already exists"
             exit 0
           fi
 
-          gh pr create \
+          gh pr create --repo ${{ github.repository }} \
             --title "Sync from upstream ${{ env.UPSTREAM_REPO }}" \
             --body "Auto-sync from upstream" \
             --base ${{ env.FORK_BRANCH }} \
