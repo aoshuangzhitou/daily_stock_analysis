@@ -1,54 +1,31 @@
 # 自动同步 Fork 与上游仓库
-#
-# 功能：
-# 1. 每天自动检查上游仓库更新
-# 2. 自动合并到当前 fork 的 main 分支
-# 3. 支持手动触发同步
-# 4. 同步失败时发送通知
-#
-# 配置要求：
-# 1. 在仓库 Settings -> Secrets -> Actions 中添加 PAT_TOKEN（Personal Access Token）
-#    - 需要权限: repo, workflow
-# 2. 可选：配置飞书/钉钉 webhook 接收同步通知
-#
-# 作者: Claude Code
-# 日期: 2026-03-22
-
 name: Sync Fork with Upstream
 
 on:
-  # 每天 UTC 00:00 自动运行 (北京时间 08:00)
   schedule:
     - cron: '0 0 * * *'
-  # 允许手动触发
   workflow_dispatch:
     inputs:
       sync_branch:
-        description: '要同步的分支 (默认: main)'
+        description: 'Branch to sync (default: main)'
         required: false
         default: 'main'
         type: string
 
-# 权限设置
 permissions:
   contents: write
+  pull-requests: write
 
 env:
-  # 上游仓库地址
   UPSTREAM_REPO: ZhuLinsen/daily_stock_analysis
   UPSTREAM_BRANCH: main
-  # 你的 fork 分支
   FORK_BRANCH: main
 
 jobs:
   sync:
     name: Sync Fork
     runs-on: ubuntu-latest
-
     steps:
-      # -------------------------------
-      # 1. 检出代码
-      # -------------------------------
       - name: Checkout Fork
         uses: actions/checkout@v4
         with:
@@ -56,128 +33,66 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
 
-      # -------------------------------
-      # 2. 配置 Git
-      # -------------------------------
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # -------------------------------
-      # 3. 添加并获取上游仓库
-      # -------------------------------
       - name: Fetch Upstream
         id: fetch
         run: |
-          echo "🔍 添加上游仓库: ${{ env.UPSTREAM_REPO }}"
+          echo "Adding upstream: ${{ env.UPSTREAM_REPO }}"
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
-
-          echo "📥 获取上游分支..."
           git fetch upstream ${{ env.UPSTREAM_BRANCH }}
 
-          echo "📊 检查更新..."
           UPSTREAM_COMMIT=$(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
           LOCAL_COMMIT=$(git rev-parse HEAD)
 
-          echo "上游最新 commit: $UPSTREAM_COMMIT"
-          echo "本地最新 commit: $LOCAL_COMMIT"
+          echo "Upstream: $UPSTREAM_COMMIT"
+          echo "Local: $LOCAL_COMMIT"
 
           if [ "$UPSTREAM_COMMIT" = "$LOCAL_COMMIT" ]; then
-            echo "✅ 已经是最新，无需同步"
+            echo "Already up to date"
             echo "has_update=false" >> $GITHUB_OUTPUT
           else
-            echo "🔄 发现更新，需要同步"
+            echo "Updates found"
             echo "has_update=true" >> $GITHUB_OUTPUT
-
-            # 显示更新摘要
-            echo "📋 更新日志:"
             git log --oneline HEAD..upstream/${{ env.UPSTREAM_BRANCH }} | head -20
           fi
 
-      # -------------------------------
-      # 4. 执行同步（合并上游变更）
-      # -------------------------------
       - name: Sync Changes
         id: sync
         if: steps.fetch.outputs.has_update == 'true'
         run: |
-          echo "🔄 开始同步..."
-
-          # 创建临时分支进行合并
           git checkout -b sync-temp upstream/${{ env.UPSTREAM_BRANCH }}
-
-          # 尝试合并到本地分支
           git checkout ${{ env.FORK_BRANCH }}
 
-          # 使用 merge 策略（保留本地修改）
           if git merge sync-temp --no-edit -m "Sync from upstream ${{ env.UPSTREAM_REPO }}"; then
-            echo "✅ 合并成功"
             echo "sync_status=success" >> $GITHUB_OUTPUT
           else
-            echo "❌ 合并失败，存在冲突"
             git merge --abort || true
             echo "sync_status=conflict" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          # 清理临时分支
           git branch -D sync-temp || true
 
-      # -------------------------------
-      # 5. 推送同步后的代码
-      # -------------------------------
       - name: Push to Fork
         if: steps.sync.outputs.sync_status == 'success'
         run: |
-          echo "📤 推送到 fork..."
           git push origin ${{ env.FORK_BRANCH }}
-          echo "✅ 同步完成！"
 
-      # -------------------------------
-      # 6. 发送成功通知（可选）
-      # -------------------------------
-      - name: Notify Success
-        if: steps.sync.outputs.sync_status == 'success' && success()
-        run: |
-          echo "📧 同步成功！"
-          echo "仓库: ${{ github.repository }}"
-          echo "上游: ${{ env.UPSTREAM_REPO }}"
-          echo "时间: $(date)"
-
-      # -------------------------------
-      # 7. 冲突处理提示
-      # -------------------------------
       - name: Handle Conflict
         if: failure() && steps.sync.outputs.sync_status == 'conflict'
         run: |
-          echo "⚠️ 同步失败：存在冲突"
-          echo ""
-          echo "解决步骤："
-          echo "1. 本地手动同步："
-          echo "   git fetch upstream"
-          echo "   git checkout main"
-          echo "   git merge upstream/main"
-          echo ""
-          echo "2. 解决冲突后提交："
-          echo "   git add ."
-          echo "   git commit -m 'Merge upstream changes'"
-          echo "   git push origin main"
-          echo ""
-          echo "或者丢弃本地修改（慎用）："
-          echo "   git reset --hard upstream/main"
-          echo "   git push origin main --force"
+          echo "Merge conflict detected"
           exit 1
 
-  # -------------------------------
-  # 可选：创建同步 PR（更安全的同步方式）
-  # -------------------------------
   create-pr:
     name: Create Sync PR
     runs-on: ubuntu-latest
     needs: sync
     if: failure() || github.event_name == 'workflow_dispatch'
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -186,44 +101,29 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Add Upstream Remote
+      - name: Setup GitHub CLI
         run: |
           git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
           git fetch upstream ${{ env.UPSTREAM_BRANCH }}
 
       - name: Create Sync Branch
         run: |
-          # 创建同步分支并推送到 origin
           git checkout -b sync-upstream upstream/${{ env.UPSTREAM_BRANCH }}
           git push origin sync-upstream --force
 
-      - name: Create Sync PR
+      - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          # 配置 GH CLI
-          echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
-
-          # 检查是否已有同名 PR
-          EXISTING_PR=$(gh pr list --head sync-upstream --base ${{ env.FORK_BRANCH }} --json number -q '.[0].number')
+          EXISTING_PR=$(gh pr list --head sync-upstream --base ${{ env.FORK_BRANCH }} --json number -q '.[0].number' 2>/dev/null || echo "")
 
           if [ -n "$EXISTING_PR" ]; then
-            echo "📝 PR #$EXISTING_PR 已存在，跳过创建"
+            echo "PR #$EXISTING_PR already exists"
             exit 0
           fi
 
-          # 创建 PR
           gh pr create \
-            --title "🔄 Sync from upstream ${{ env.UPSTREAM_REPO }}" \
-            --body "自动同步上游仓库更新
-
-          - 上游仓库: ${{ env.UPSTREAM_REPO }}
-          - 上游分支: ${{ env.UPSTREAM_BRANCH }}
-          - 触发时间: ${{ github.event.schedule || 'manual' }}
-
-          如有冲突请手动解决。" \
+            --title "Sync from upstream ${{ env.UPSTREAM_REPO }}" \
+            --body "Auto-sync from upstream" \
             --base ${{ env.FORK_BRANCH }} \
-            --head sync-upstream \
-            --repo ${{ github.repository }}
-
-          echo "✅ PR 创建成功"
+            --head sync-upstream
