@@ -49,9 +49,8 @@ jobs:
       
       - name: 安装依赖
         run: |
-          pip install pip==24.0.0 --no-cache-dir
-          pip install litellm>=1.80.10 -i https://pypi.org/simple/ --no-cache-dir
-          pip install -r requirements.txt -i https://pypi.org/simple/
+          pip install pip
+          pip install -r requirements.txt
       
       - name: 创建必要目录
         run: |
