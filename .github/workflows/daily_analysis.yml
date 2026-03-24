@@ -50,7 +50,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install pip==24.0.0
-          pip install -r requirements.txt
+          pip install -r requirements.txt -i https://pypi.org/simple/
       
       - name: 创建必要目录
         run: |
