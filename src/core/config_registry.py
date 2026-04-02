@@ -10,7 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
-SCHEMA_VERSION = "2026-03-19"
+SCHEMA_VERSION = "2026-03-29"
 
 _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
     {
@@ -82,8 +82,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     # AI Model – LiteLLM unified config
     # ------------------------------------------------------------------
     "LITELLM_MODEL": {
-        "title": "Primary Model (LiteLLM)",
-        "description": "Unified primary model in provider/model format (e.g. gemini/gemini-3-flash-preview, openai/deepseek-chat, anthropic/claude-3-5-sonnet-20241022). If empty, auto-inferred from available API keys.",
+        "title": "Primary Model",
+        "description": "Primary model in provider/model format (e.g. gemini/gemini-3-flash-preview, openai/deepseek-chat, anthropic/claude-3-5-sonnet-20241022). If empty, it is auto-inferred from available API keys or channel declarations.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -97,7 +97,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AGENT_LITELLM_MODEL": {
         "title": "Agent Primary Model",
-        "description": "Optional Agent-only primary model in provider/model format. When empty, Agent inherits LITELLM_MODEL. Bare model names are normalized to openai/<model>.",
+        "description": "Optional Agent-only primary model in provider/model format. When empty, Agent inherits the primary model. Bare model names are normalized to openai/<model>.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -110,8 +110,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "display_order": 2,
     },
     "LITELLM_FALLBACK_MODELS": {
-        "title": "Fallback Models (LiteLLM)",
-        "description": "Comma-separated fallback models tried when the primary model fails (e.g. anthropic/claude-3-5-sonnet-20241022,openai/gpt-4o-mini). Enables cross-provider redundancy.",
+        "title": "Fallback Models",
+        "description": "Comma-separated fallback models tried when the primary model fails (e.g. anthropic/claude-3-5-sonnet-20241022,openai/gpt-4o-mini). Useful for cross-provider redundancy.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -127,8 +127,8 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     # AI Model – Multi-channel LLM configuration
     # ------------------------------------------------------------------
     "LITELLM_CONFIG": {
-        "title": "LiteLLM Config File",
-        "description": "Path to litellm_config.yaml (advanced). Takes priority over channels and legacy keys.",
+        "title": "Advanced Model Routing Config",
+        "description": "Path to an advanced model routing YAML file (expert use). When valid/parseable and yields a model_list, it takes priority over channels and legacy keys; otherwise channels/legacy are used as fallback.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "text",
@@ -1000,6 +1000,20 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {},
         "display_order": 35,
     },
+    "DISCORD_INTERACTIONS_PUBLIC_KEY": {
+        "title": "Discord Interactions Public Key",
+        "description": "Discord public key used to verify inbound interaction/webhook signatures.",
+        "category": "notification",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": None,
+        "options": [],
+        "validation": {},
+        "display_order": 36,
+    },
     # ------------------------------------------------------------------
     # Notification – Slack  (Bot > Webhook when both configured)
     # ------------------------------------------------------------------
@@ -1015,7 +1029,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 36,
+        "display_order": 37,
     },
     "SLACK_CHANNEL_ID": {
         "title": "Slack Channel ID",
@@ -1029,7 +1043,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 37,
+        "display_order": 38,
     },
     "SLACK_WEBHOOK_URL": {
         "title": "Slack Incoming Webhook URL",
@@ -1043,7 +1057,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "default_value": None,
         "options": [],
         "validation": {},
-        "display_order": 38,
+        "display_order": 39,
     },
     # ------------------------------------------------------------------
     # Notification – Pushover
