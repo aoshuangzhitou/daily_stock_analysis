@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Agent SSE 流清理阶段静默吞掉后台执行器异常 — 流结束时后台任务异常现在正确记录并上报，避免错误无法感知（fixes #969）
 - [文档] FAQ 补充 Ollama `OllamaException / APIConnectionError` 连接失败排障条目（Q12c），覆盖服务未启动、URL 配置错误、模型前缀缺失、模型未下载、远程防火墙等 5 个检查点
 - [修复] 技能加载异常被静默吞没问题 — 在 ask.py、skills/aggregator.py、skills/router.py 的静默 except 块补充 logger.warning 日志，确保技能列表为空时有日志可查（fixes #970）
+- [修复] SQLite 主写入链路现在对 `stock_daily(code,date)` 使用批量原子 upsert，并在文件型 SQLite 连接上默认启用 `WAL`、`busy_timeout` 与有限写入重试，降低批量分析和并发回写场景下的锁竞争与吞吐抖动，返回值中的“新增数”改为按本次真正插入窗口计算（并发场景不再把并行写入行误算入当前调用）。
 
 ## [3.12.0] - 2026-04-01
 
@@ -72,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 🔎 **SerpAPI 正文补抓范围收敛** — 自然搜索结果不再逐条同步抓取网页正文；现在仅对极少数高位且摘要明显不足的结果，在更短超时预算内做延迟补抓，并优先复用 SerpAPI 已返回的结构化摘要，降低搜索链路尾延迟与慢站点放大风险。
 - [修复] A 股和中文股票名称场景下的相关资讯搜索恢复中文优先策略：`search_stock_news()` 现在会在首个 provider 主要返回英文资讯时继续尝试后续引擎，并将同批结果中的中文资讯排到前面；同时非美股查询不再默认沿用 Brave 的 `en/US` 区域语言偏好，避免更新后被英文新闻结果占满。
 - [修复] 飞书群机器人通知现在支持 `FEISHU_WEBHOOK_SECRET` / `FEISHU_WEBHOOK_KEYWORD`，并在 Web 设置与文档中明确区分 Webhook 推送和 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 应用模式，降低误配导致的推送失败。
+- [改进] 🤖 **普通分析链路支持 LiteLLM 流式生成与更细任务进度** — 常规股票分析在 LLM 阶段会优先尝试 `stream=True` 并在服务端累积 chunk，首页任务 SSE 新增 `task_progress` 事件与更细的 `message/progress` 更新；仅在最终 JSON 解析成功后才持久化历史报告，不支持流式的 provider 会在首个 chunk 前自动回退到原非流式调用。
+- [新功能] Web AI 模型配置支持按渠道调用 `/models` 获取可用模型，并在渠道编辑器中以多选方式写回 `LLM_{CHANNEL}_MODELS`，获取失败时仍保留手动输入作为降级路径。
 
 ## [3.11.0] - 2026-03-27
 
