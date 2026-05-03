@@ -119,7 +119,7 @@ LLM_DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro
 # 3. 渠道二：配置一个常用的聚合中转 API
 LLM_AIHUBMIX_BASE_URL=https://api.aihubmix.com/v1
 LLM_AIHUBMIX_API_KEY=sk-2222222222222
-LLM_AIHUBMIX_MODELS=gpt-4o-mini,claude-3-5-sonnet
+LLM_AIHUBMIX_MODELS=gpt-5.5,claude-sonnet-4-6
 
 # 4. 【关键】指定主模型和备用模型列表
 # 平时首选用 deepseek 这款模型：
@@ -127,7 +127,7 @@ LITELLM_MODEL=deepseek/deepseek-v4-flash
 # 可选：Agent 问股单独指定主模型（留空则继承主模型）
 AGENT_LITELLM_MODEL=deepseek/deepseek-v4-pro
 # 主模型崩了立刻挨个尝试下面这俩备用模型：
-LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,anthropic/claude-3-5-sonnet
+LITELLM_FALLBACK_MODELS=openai/gpt-5.4-mini,anthropic/claude-sonnet-4-6
 ```
 
 ### 示例：Ollama 渠道模式（本地模型，无需 API Key）
@@ -248,9 +248,9 @@ model_list:
 
 ```env
 # 指定你看图专用的模型名
-VISION_MODEL=gemini/gemini-2.5-flash
-# 别忘了填写它对应提供商的 API KEY，如果是 gemini 就提供 GEMINI_API_KEY：
-# GEMINI_API_KEY=xxx
+VISION_MODEL=openai/gpt-5.5
+# 别忘了填写它对应提供商的 API KEY，如果是 OpenAI 兼容渠道就提供 OPENAI_API_KEY：
+# OPENAI_API_KEY=xxx
 ```
 
 **备用看图机制：** 为了防止偶尔罢工，系统内置了切换策略。如果主视觉模型调用失败，它会按照下方的顺位尝试寻找是否有其他看图模型的 Key：
@@ -272,7 +272,7 @@ VISION_PROVIDER_PRIORITY=gemini,anthropic,openai
 
 | 遇到了什么诡异报错？ | 罪魁祸首可能是啥？ | 该怎么收拾它？ |
 |----------------------|----------------------|------------------|
-| **界面提示主模型未配置** | 系统不知道你到底想用哪家的哪个模型 | 在 `.env` 中写上一句明白话：`LITELLM_MODEL=provider/你的模型名`。比如 `openai/gpt-4o-mini` |
+| **界面提示主模型未配置** | 系统不知道你到底想用哪家的哪个模型 | 在 `.env` 中写上一句明白话：`LITELLM_MODEL=provider/你的模型名`。比如 `openai/gpt-5.5` |
 | **我写了好几家的Key，为什么死活只有一个生效？修改还没用？** | 你把 **极简模式** 和 **渠道模式** 混着写了！ | 想好一条路走到黑——只要简单就删掉 `LLM_CHANNELS` 开头的；想要丰富备用切换就要全部转投到 `LLM_CHANNELS` 下的编制里。 |
 | **错误码报 400 或 401 或 Invalid API Key** | API Key 填错、少复制了一截、账号充值没到账、或者模型名字敲错（极度常见）。 | 1. 检查复制的 Key 前后是否有误填空格。<br> 2. 检查 Base URL 最后是不是少了一个 `/v1`。<br> 3. 检查模型名是否少写了 `openai/` 之类的前缀！ |
 | **Kimi K2.6 报 `invalid temperature`（可能提示只允许 `1.0` 或 `0.6`）** | 该模型按 thinking / non-thinking 模式要求不同固定 temperature；旧配置或调用入口可能还在传 `0.7`。 | 升级后系统会对 `kimi-k2.6` 默认 / thinking 请求自动使用 `temperature=1.0`；如果你在 LiteLLM YAML 路由里显式关闭 thinking，则自动改用 `0.6`。模型名建议写成 `openai/kimi-k2.6` 并配合 Moonshot / 聚合平台的 OpenAI 兼容 Base URL 与 API Key。非 Kimi fallback 仍会继续使用你配置的 `LLM_TEMPERATURE`。 |

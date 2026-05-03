@@ -19,7 +19,7 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     label: 'AIHubmix（聚合平台）',
     protocol: 'openai',
     baseUrl: 'https://aihubmix.com/v1',
-    placeholder: 'gpt-4o-mini,claude-3-5-sonnet,qwen-plus',
+    placeholder: 'gpt-5.5,claude-sonnet-4-6,gemini-3.1-pro-preview',
   },
   deepseek: {
     label: 'DeepSeek 官方',
@@ -31,49 +31,61 @@ const CHANNEL_PRESETS: Record<string, ChannelPreset> = {
     label: '通义千问（Dashscope）',
     protocol: 'openai',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    placeholder: 'qwen-plus,qwen-turbo',
+    placeholder: 'qwen3.6-plus,qwen3.6-flash',
   },
   zhipu: {
     label: '智谱 GLM',
     protocol: 'openai',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    placeholder: 'glm-4-flash,glm-4-plus',
+    placeholder: 'glm-5.1,glm-4.7-flash',
   },
   moonshot: {
     label: 'Moonshot（月之暗面）',
     protocol: 'openai',
     baseUrl: 'https://api.moonshot.cn/v1',
-    placeholder: 'moonshot-v1-8k',
+    placeholder: 'kimi-k2.6,kimi-k2.5',
+  },
+  minimax: {
+    label: 'MiniMax 官方',
+    protocol: 'openai',
+    baseUrl: 'https://api.minimax.io/v1',
+    placeholder: 'MiniMax-M2.7,MiniMax-M2.7-highspeed',
+  },
+  volcengine: {
+    label: '火山方舟（豆包）',
+    protocol: 'openai',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    placeholder: 'doubao-seed-1-6-251015,doubao-seed-1-6-thinking-251015',
   },
   siliconflow: {
     label: '硅基流动（SiliconFlow）',
     protocol: 'openai',
     baseUrl: 'https://api.siliconflow.cn/v1',
-    placeholder: 'Qwen/Qwen3-8B,deepseek-ai/DeepSeek-V3',
+    placeholder: 'deepseek-ai/DeepSeek-V3.2,Qwen/Qwen3-235B-A22B-Thinking-2507',
   },
   openrouter: {
     label: 'OpenRouter',
     protocol: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
-    placeholder: 'openai/gpt-4o,anthropic/claude-3-5-sonnet',
+    placeholder: '~openai/gpt-latest,~anthropic/claude-sonnet-latest',
   },
   gemini: {
     label: 'Gemini 官方',
     protocol: 'gemini',
     baseUrl: '',
-    placeholder: 'gemini-2.5-flash,gemini-2.5-pro',
+    placeholder: 'gemini-3.1-pro-preview,gemini-3-flash-preview',
   },
   anthropic: {
     label: 'Anthropic 官方',
     protocol: 'anthropic',
     baseUrl: '',
-    placeholder: 'claude-3-5-sonnet-20241022',
+    placeholder: 'claude-sonnet-4-6,claude-opus-4-7',
   },
   openai: {
     label: 'OpenAI 官方',
     protocol: 'openai',
     baseUrl: 'https://api.openai.com/v1',
-    placeholder: 'gpt-4o,gpt-4o-mini',
+    placeholder: 'gpt-5.5,gpt-5.4-mini',
   },
   ollama: {
     label: 'Ollama（本地）',
@@ -99,11 +111,11 @@ const PROTOCOL_OPTIONS: Array<{ value: ChannelProtocol; label: string }> = [
 ];
 
 const MODEL_PLACEHOLDERS: Record<ChannelProtocol, string> = {
-  openai: 'gpt-4o-mini,qwen-plus',
+  openai: 'gpt-5.5,qwen3.6-plus',
   deepseek: 'deepseek-v4-flash,deepseek-v4-pro',
-  gemini: 'gemini-2.5-flash,gemini-2.5-pro',
-  anthropic: 'claude-3-5-sonnet-20241022',
-  vertex_ai: 'gemini-2.5-flash',
+  gemini: 'gemini-3.1-pro-preview,gemini-3-flash-preview',
+  anthropic: 'claude-sonnet-4-6,claude-opus-4-7',
+  vertex_ai: 'gemini-3.1-pro-preview',
   ollama: 'llama3.2,qwen2.5',
 };
 
@@ -907,6 +919,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
 
   const prevChannelsRef = useRef(channelsFingerprint);
   const prevRuntimeRef = useRef(runtimeFingerprint);
+  const pendingSaveFeedbackFingerprintRef = useRef<{ channels: string; runtime: string } | null>(null);
   const discoveryNonceRef = useRef<Record<string, number>>({});
   const discoveryRequestIdRef = useRef(0);
 
@@ -916,6 +929,10 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
     }
     prevChannelsRef.current = channelsFingerprint;
     prevRuntimeRef.current = runtimeFingerprint;
+    const pendingSaveFeedbackFingerprint = pendingSaveFeedbackFingerprintRef.current;
+    const preserveSaveFeedback = pendingSaveFeedbackFingerprint?.channels === channelsFingerprint
+      && pendingSaveFeedbackFingerprint.runtime === runtimeFingerprint;
+    pendingSaveFeedbackFingerprintRef.current = null;
     setChannels(initialChannels);
     setRuntimeConfig(initialRuntimeConfig);
     setVisibleKeys({});
@@ -923,8 +940,10 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
     setDiscoveryStates({});
     setExpandedRows({});
     discoveryNonceRef.current = {};
-    setSaveMessage(null);
-    setSaveWarnings([]);
+    if (!preserveSaveFeedback) {
+      setSaveMessage(null);
+      setSaveWarnings([]);
+    }
     setIsCollapsed(false);
   }, [channelsFingerprint, runtimeFingerprint, initialChannels, initialRuntimeConfig]);
 
@@ -1124,6 +1143,10 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       });
       const responseWarnings = response.warnings || [];
       await onSaved(updateItems);
+      pendingSaveFeedbackFingerprintRef.current = {
+        channels: JSON.stringify(parseChannelsFromItems(updateItems)),
+        runtime: JSON.stringify(parseRuntimeConfigFromItems(updateItems)),
+      };
       setSaveWarnings(responseWarnings);
       setSaveMessage({ type: 'success', text: managesRuntimeConfig ? 'AI 配置已保存' : '渠道配置已保存' });
     } catch (error: unknown) {

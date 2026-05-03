@@ -119,7 +119,7 @@ LLM_DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro
 # 3. Channel 2: Configure a common relay/proxy API
 LLM_AIHUBMIX_BASE_URL=https://api.aihubmix.com/v1
 LLM_AIHUBMIX_API_KEY=sk-2222222222222
-LLM_AIHUBMIX_MODELS=gpt-4o-mini,claude-3-5-sonnet
+LLM_AIHUBMIX_MODELS=gpt-5.5,claude-sonnet-4-6
 
 # 4. [Key Step] Specify the primary model and fallback list
 # Set your primary model:
@@ -127,7 +127,7 @@ LITELLM_MODEL=deepseek/deepseek-v4-flash
 # Optional: set an Agent-only primary model (empty = inherit the primary model)
 AGENT_LITELLM_MODEL=deepseek/deepseek-v4-pro
 # If the primary model crashes, try these fallbacks sequentially:
-LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,anthropic/claude-3-5-sonnet
+LITELLM_FALLBACK_MODELS=openai/gpt-5.4-mini,anthropic/claude-sonnet-4-6
 ```
 
 ### Example: Ollama Channel Mode (Local Models, No API Key)
@@ -222,9 +222,9 @@ Certain specific features in our system (like uploading a stock chart screenshot
 
 ```env
 # Specify your dedicated vision model name
-VISION_MODEL=gemini/gemini-2.5-flash
-# Make sure to provide its corresponding provider API KEY (e.g., GEMINI_API_KEY):
-# GEMINI_API_KEY=xxx
+VISION_MODEL=openai/gpt-5.5
+# Make sure to provide its corresponding provider API KEY (e.g., OPENAI_API_KEY):
+# OPENAI_API_KEY=xxx
 ```
 
 **Vision Fallback Mechanism:** To prevent unexpected failures, the system has a built-in fallback strategy. If the primary vision model fails, it will attempt to use alternative vision-capable provider keys in the following order:
@@ -246,7 +246,7 @@ Afraid you got the config wrong? Type the following commands in your terminal to
 
 | Weird Error You Got? | Likely Culprit | How to Fix It? |
 |----------------------|----------------|----------------|
-| **The UI says the primary model is not configured** | The system doesn't know which provider/model you want to use. | Add a clear instruction in `.env`: `LITELLM_MODEL=provider/your_model_name`. Example: `openai/gpt-4o-mini`. |
+| **The UI says the primary model is not configured** | The system doesn't know which provider/model you want to use. | Add a clear instruction in `.env`: `LITELLM_MODEL=provider/your_model_name`. Example: `openai/gpt-5.5`. |
 | **I added multiple provider Keys, why is only one working?** | You mixed the **Simple Mode** and **Channels Mode**! | Choose one path. For simple setups, delete anything starting with `LLM_CHANNELS`. To use multi-model fallbacks, migrate all your Keys into the `LLM_CHANNELS` setup. |
 | **Returns 400, 401, or Invalid API Key** | The API Key is wrong, copied incompletely, account lacks credits, or you mistyped the model name (extremely common). | 1. Ensure there are no spaces at the start/end of your Key.<br> 2. Ensure your Base URL ends with `/v1`.<br> 3. Check if you forgot the `openai/` prefix on the model name! |
 | **Kimi K2.6 returns `invalid temperature` (it may say only `1.0` or `0.6` is allowed)** | The model requires different fixed temperatures for thinking vs non-thinking mode, while older config or call paths may still pass `0.7`. | After this fix, default / thinking `kimi-k2.6` requests automatically use `temperature=1.0`; if you explicitly disable thinking in a LiteLLM YAML route, the request automatically uses `0.6` instead. Prefer `openai/kimi-k2.6` with your Moonshot or relay OpenAI-compatible Base URL and API key. Non-Kimi fallbacks still keep your configured `LLM_TEMPERATURE`. |

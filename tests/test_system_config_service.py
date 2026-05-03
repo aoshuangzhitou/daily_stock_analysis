@@ -1034,6 +1034,18 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(validation["valid"])
         self.assertTrue(any(issue["code"] == "invalid_event_rule" for issue in validation["issues"]))
 
+    def test_validate_accepts_price_change_percent_event_rule(self) -> None:
+        validation = self.service.validate(items=[{
+            "key": "AGENT_EVENT_ALERT_RULES_JSON",
+            "value": (
+                '[{"stock_code":"300750","alert_type":"price_change_percent",'
+                '"direction":"down","change_pct":3.0}]'
+            ),
+        }])
+
+        self.assertTrue(validation["valid"])
+        self.assertEqual(validation["issues"], [])
+
     def test_validate_rejects_unsupported_event_rule_type(self) -> None:
         validation = self.service.validate(items=[{
             "key": "AGENT_EVENT_ALERT_RULES_JSON",
