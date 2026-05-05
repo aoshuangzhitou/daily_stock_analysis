@@ -6,9 +6,11 @@ import { systemConfigApi } from '../../api/systemConfig';
 import { ApiErrorAlert, Badge, Button, InlineAlert, Input, Select, StatusDot, Tooltip } from '../common';
 import type { ChannelProtocol } from './llmProviderTemplates';
 import {
-  LLM_PROVIDER_TEMPLATE_BY_ID,
+  LLM_PROVIDER_CAPABILITY_LABELS,
   LLM_PROVIDER_TEMPLATES,
   MODEL_PLACEHOLDERS_BY_PROTOCOL,
+  getProviderTemplate,
+  isKnownProviderTemplate,
 } from './llmProviderTemplates';
 
 const PROTOCOL_OPTIONS: Array<{ value: ChannelProtocol; label: string }> = [
@@ -116,8 +118,12 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
   onTest,
   onDiscoverModels,
 }) => {
-  const preset = LLM_PROVIDER_TEMPLATE_BY_ID[channel.name];
+  const preset = getProviderTemplate(channel.name);
+  const showProviderTemplateDetails = isKnownProviderTemplate(channel.name);
   const displayName = preset?.label || channel.name;
+  const providerCapabilities = showProviderTemplateDetails ? (preset?.capabilities || []) : [];
+  const providerSources = showProviderTemplateDetails ? (preset?.officialSources || []) : [];
+  const providerHint = showProviderTemplateDetails ? preset?.configHint : undefined;
   const selectedModels = splitModels(channel.models);
   const discoveredModels = discoveryState?.models || [];
   const manualOnlyModels = selectedModels.filter(
@@ -252,6 +258,48 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
                 : preset?.baseUrl || 'https://api.example.com/v1'
             }
           />
+
+          {showProviderTemplateDetails ? (
+            <div className="space-y-2 rounded-xl border border-[var(--settings-border)] bg-[var(--settings-surface-hover)] p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-medium text-muted-text">配置参考</span>
+                {providerCapabilities.map((capability) => {
+                  const capabilityMeta = LLM_PROVIDER_CAPABILITY_LABELS[capability];
+                  return (
+                    <Tooltip key={capability} content={capabilityMeta.hint}>
+                      <span className="inline-flex">
+                        <Badge variant="default" className="border-[var(--settings-border)] bg-[var(--settings-surface)] text-secondary-text">
+                          {capabilityMeta.label}
+                        </Badge>
+                      </span>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+              {providerHint ? (
+                <p className="text-[11px] leading-5 text-secondary-text">{providerHint}</p>
+              ) : null}
+              {providerSources.length > 0 ? (
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-5 text-secondary-text">
+                  <span>官方来源：</span>
+                  {providerSources.map((source) => (
+                    <a
+                      key={source.url}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="settings-accent-text underline-offset-2 hover:underline"
+                    >
+                      {source.label}
+                    </a>
+                  ))}
+                </p>
+              ) : null}
+              <p className="text-[11px] leading-5 text-muted-text">
+                能力标签仅用于配置参考，不代表运行时能力已验证通过。
+              </p>
+            </div>
+          ) : null}
 
           <Input
             label="API Key"
@@ -915,9 +963,9 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
       const updated = { ...channel, [field]: value };
 
       if (field === 'name' && typeof value === 'string') {
-        const newPreset = LLM_PROVIDER_TEMPLATE_BY_ID[value];
+        const newPreset = getProviderTemplate(value);
         if (newPreset) {
-          const oldPreset = LLM_PROVIDER_TEMPLATE_BY_ID[channel.name];
+          const oldPreset = getProviderTemplate(channel.name);
           if (!updated.baseUrl || updated.baseUrl === (oldPreset?.baseUrl ?? '')) {
             updated.baseUrl = newPreset.baseUrl;
           }
@@ -974,7 +1022,10 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
   };
 
   const addChannel = () => {
-    const preset = LLM_PROVIDER_TEMPLATE_BY_ID[addPreset] || LLM_PROVIDER_TEMPLATE_BY_ID.custom;
+    const preset = getProviderTemplate(addPreset) || getProviderTemplate('custom');
+    if (!preset) {
+      return;
+    }
     setChannels((previous) => {
       const existingNames = new Set(previous.map((channel) => channel.name));
       const baseName = addPreset === 'custom' ? 'custom' : addPreset;

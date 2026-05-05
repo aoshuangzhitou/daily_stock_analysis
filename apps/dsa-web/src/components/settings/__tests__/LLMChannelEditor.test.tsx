@@ -146,6 +146,87 @@ describe('LLMChannelEditor', () => {
     expect(screen.getByLabelText('模型（逗号分隔）')).toHaveValue(models);
   });
 
+  it('shows provider capability badges, official sources, and config hints', async () => {
+    render(
+      <LLMChannelEditor
+        items={[
+          { key: 'LLM_CHANNELS', value: 'openrouter' },
+          { key: 'LLM_OPENROUTER_PROTOCOL', value: 'openai' },
+          { key: 'LLM_OPENROUTER_BASE_URL', value: 'https://openrouter.ai/api/v1' },
+          { key: 'LLM_OPENROUTER_ENABLED', value: 'true' },
+          { key: 'LLM_OPENROUTER_API_KEY', value: 'sk-or-test' },
+          { key: 'LLM_OPENROUTER_MODELS', value: '~anthropic/claude-sonnet-latest' },
+        ]}
+        configVersion="v1"
+        maskToken="******"
+        onSaved={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /OpenRouter/i }));
+
+    expect(await screen.findByText('配置参考')).toBeInTheDocument();
+    expect(screen.getByText('OpenAI 兼容')).toBeInTheDocument();
+    expect(screen.getByText('聚合平台')).toBeInTheDocument();
+    expect(screen.getByText('可获取模型')).toBeInTheDocument();
+    expect(screen.getByText(/模型列表和模型可见性依赖账号权限与 API Key/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'OpenRouter Models API' })).toHaveAttribute(
+      'href',
+      'https://openrouter.ai/docs/api/api-reference/models/get-models',
+    );
+    expect(screen.getByText(/能力标签仅用于配置参考，不代表运行时能力已验证通过/i)).toBeInTheDocument();
+    expect(screen.queryByText('JSON')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tools')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stream')).not.toBeInTheDocument();
+  });
+
+  it('shows model-discovery capability for SiliconFlow provider hints', async () => {
+    render(
+      <LLMChannelEditor
+        items={[
+          { key: 'LLM_CHANNELS', value: 'siliconflow' },
+          { key: 'LLM_SILICONFLOW_PROTOCOL', value: 'openai' },
+          { key: 'LLM_SILICONFLOW_BASE_URL', value: 'https://api.siliconflow.cn/v1' },
+          { key: 'LLM_SILICONFLOW_ENABLED', value: 'true' },
+          { key: 'LLM_SILICONFLOW_API_KEY', value: 'sk-test' },
+          { key: 'LLM_SILICONFLOW_MODELS', value: 'deepseek-ai/DeepSeek-V3.2' },
+        ]}
+        configVersion="v1"
+        maskToken="******"
+        onSaved={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /SiliconFlow/i }));
+
+    expect(await screen.findByText('可获取模型')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'SiliconFlow Models' })).toBeInTheDocument();
+  });
+
+  it('does not show provider metadata for custom or unknown channels', async () => {
+    render(
+      <LLMChannelEditor
+        items={[
+          { key: 'LLM_CHANNELS', value: 'my_proxy' },
+          { key: 'LLM_MY_PROXY_PROTOCOL', value: 'openai' },
+          { key: 'LLM_MY_PROXY_BASE_URL', value: 'https://proxy.example.com/v1' },
+          { key: 'LLM_MY_PROXY_ENABLED', value: 'true' },
+          { key: 'LLM_MY_PROXY_API_KEY', value: 'sk-test' },
+          { key: 'LLM_MY_PROXY_MODELS', value: 'custom-model' },
+        ]}
+        configVersion="v1"
+        maskToken="******"
+        onSaved={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /my_proxy/i }));
+
+    expect(screen.queryByText('配置参考')).not.toBeInTheDocument();
+    expect(screen.queryByText(/官方来源/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/能力标签仅用于配置参考/i)).not.toBeInTheDocument();
+  });
+
   it('preserves manually edited base URL and models when switching preset names', async () => {
     render(
       <LLMChannelEditor
@@ -203,6 +284,7 @@ describe('LLMChannelEditor', () => {
       'MiniMax-M2.7,MiniMax-M2.7-highspeed',
       'MiniMax-M2.7,MiniMax-M2.7-highspeed',
     ]);
+    expect(screen.getAllByRole('link', { name: 'MiniMax OpenAI API' })).toHaveLength(1);
   });
 
   it('saves the MiniMax preset into LLM channel env keys', async () => {
