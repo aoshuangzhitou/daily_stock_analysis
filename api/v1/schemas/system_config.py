@@ -8,6 +8,19 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 LLMCapabilityCheck = Literal["json", "tools", "vision", "stream"]
+NotificationTestChannel = Literal[
+    "wechat",
+    "feishu",
+    "telegram",
+    "email",
+    "pushover",
+    "pushplus",
+    "serverchan3",
+    "custom",
+    "discord",
+    "slack",
+    "astrbot",
+]
 
 
 class SystemConfigOption(BaseModel):
@@ -202,6 +215,43 @@ class TestLLMChannelResponse(BaseModel):
     resolved_model: Optional[str] = None
     latency_ms: Optional[int] = None
     capability_results: Dict[str, LLMCapabilityCheckResult] = Field(default_factory=dict)
+
+
+class NotificationTestAttempt(BaseModel):
+    """One notification delivery attempt result."""
+
+    channel: NotificationTestChannel
+    success: bool
+    message: str
+    target: Optional[str] = None
+    error_code: Optional[str] = None
+    stage: str = "notification_send"
+    retryable: bool = False
+    latency_ms: Optional[int] = None
+    http_status: Optional[int] = None
+
+
+class TestNotificationChannelRequest(BaseModel):
+    """Request payload for testing one notification channel."""
+
+    channel: NotificationTestChannel
+    items: List[SystemConfigUpdateItem] = Field(default_factory=list)
+    mask_token: str = "******"
+    title: str = Field(default="DSA 通知测试", min_length=1, max_length=80)
+    content: str = Field(default="这是一条来自 DSA Web 设置页的通知测试消息。", min_length=1, max_length=1000)
+    timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
+
+
+class TestNotificationChannelResponse(BaseModel):
+    """Response payload for one notification channel connectivity test."""
+
+    success: bool
+    message: str
+    error_code: Optional[str] = None
+    stage: Optional[str] = None
+    retryable: bool = False
+    latency_ms: Optional[int] = None
+    attempts: List[NotificationTestAttempt] = Field(default_factory=list)
 
 
 class DiscoverLLMChannelModelsRequest(BaseModel):

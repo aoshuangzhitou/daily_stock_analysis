@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Dict, Optional
 from unittest.mock import Mock, patch
 
 from tests.litellm_stub import ensure_litellm_stub
@@ -847,6 +848,166 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(validation["valid"])
         self.assertTrue(any(issue["key"] == "LITELLM_MODEL" and issue["code"] == "missing_runtime_source" for issue in validation["issues"]))
 
+    @staticmethod
+    def _mock_http_response(status_code: int, json_body: Optional[Dict[str, Any]] = None):
+        response = Mock()
+        response.status_code = status_code
+        response.text = "ok" if status_code == 200 else "error"
+        response.json.return_value = json_body or {"errcode": 0}
+        return response
+
+    def _notification_test_env(self):
+        return patch.dict(os.environ, {"ENV_FILE": str(self.env_path)}, clear=True)
+
+    @patch("src.notification_sender.wechat_sender.requests.post")
+    def test_test_notification_channel_uses_temporary_items_without_persisting(self, mock_post) -> None:
+        mock_post.return_value = self._mock_http_response(200, {"errcode": 0})
+
+        with self._notification_test_env():
+            before_instance = Config.get_instance()
+            payload = self.service.test_notification_channel(
+                channel="wechat",
+                items=[{"key": "WECHAT_WEBHOOK_URL", "value": "https://qyapi.example.com/cgi-bin/webhook/send?key=secret"}],
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+            self.assertIs(Config.get_instance(), before_instance)
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["attempts"][0]["latency_ms"] >= 0, True)
+        self.assertIn("key=***", payload["attempts"][0]["target"])
+        self.assertNotIn("WECHAT_WEBHOOK_URL", self.env_path.read_text(encoding="utf-8"))
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], 3)
+
+    def test_test_notification_channel_reports_missing_config(self) -> None:
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="telegram",
+                items=[{"key": "TELEGRAM_BOT_TOKEN", "value": "token"}],
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["error_code"], "config_missing")
+        self.assertIn("TELEGRAM_CHAT_ID", payload["message"])
+
+    @patch("src.notification_sender.wechat_sender.requests.post")
+    def test_test_notification_channel_skips_masked_secret_overwrite(self, mock_post) -> None:
+        self._rewrite_env("WECHAT_WEBHOOK_URL=https://saved.example.com/hook?key=savedsecret")
+        mock_post.return_value = self._mock_http_response(200, {"errcode": 0})
+
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="wechat",
+                items=[{"key": "WECHAT_WEBHOOK_URL", "value": "******"}],
+                mask_token="******",
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(mock_post.call_args[0][0], "https://saved.example.com/hook?key=savedsecret")
+
+    @patch("src.notification_sender.custom_webhook_sender.requests.post")
+    def test_test_notification_channel_returns_custom_webhook_attempts(self, mock_post) -> None:
+        mock_post.side_effect = [
+            self._mock_http_response(500),
+            self._mock_http_response(200),
+        ]
+
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="custom",
+                items=[
+                    {
+                        "key": "CUSTOM_WEBHOOK_URLS",
+                        "value": (
+                            "https://example.com/robot/send?access_token=first,"
+                            "https://example.com/verylongsecrettoken1234567890"
+                        ),
+                    }
+                ],
+                title="Test title",
+                content="hello",
+                timeout_seconds=4,
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(len(payload["attempts"]), 2)
+        self.assertFalse(payload["attempts"][0]["success"])
+        self.assertTrue(payload["attempts"][1]["success"])
+        self.assertIn("access_token=***", payload["attempts"][0]["target"])
+        self.assertNotIn("verylongsecrettoken1234567890", payload["attempts"][1]["target"])
+        self.assertEqual(mock_post.call_args_list[0].kwargs["timeout"], 4)
+
+    @patch("src.notification_sender.telegram_sender.requests.post")
+    def test_test_notification_channel_masks_short_sensitive_target(self, mock_post) -> None:
+        mock_post.return_value = self._mock_http_response(200, {"ok": True})
+
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="telegram",
+                items=[
+                    {"key": "TELEGRAM_BOT_TOKEN", "value": "tok123"},
+                    {"key": "TELEGRAM_CHAT_ID", "value": "chat-id"},
+                ],
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["attempts"][0]["target"], "***")
+        self.assertNotIn("tok123", str(payload))
+
+    @patch("src.notification_sender.wechat_sender.requests.post")
+    def test_test_notification_channel_strips_url_userinfo_from_target(self, mock_post) -> None:
+        mock_post.return_value = self._mock_http_response(200, {"errcode": 0})
+
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="wechat",
+                items=[
+                    {
+                        "key": "WECHAT_WEBHOOK_URL",
+                        "value": "https://user:password@example.com/cgi-bin/webhook/send?key=secret",
+                    }
+                ],
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+
+        self.assertTrue(payload["success"])
+        target = payload["attempts"][0]["target"]
+        self.assertIn("https://example.com/cgi-bin/webhook/send?key=***", target)
+        self.assertNotIn("user", target)
+        self.assertNotIn("password", target)
+
+    @patch("src.notification_sender.discord_sender.requests.post")
+    def test_test_notification_channel_prefers_discord_main_channel_alias(self, mock_post) -> None:
+        mock_post.return_value = self._mock_http_response(200)
+
+        with self._notification_test_env():
+            payload = self.service.test_notification_channel(
+                channel="discord",
+                items=[
+                    {"key": "DISCORD_BOT_TOKEN", "value": "bot-token"},
+                    {"key": "DISCORD_MAIN_CHANNEL_ID", "value": "main-channel"},
+                    {"key": "DISCORD_CHANNEL_ID", "value": "legacy-channel"},
+                ],
+                title="Test title",
+                content="hello",
+                timeout_seconds=3,
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertIn("/channels/main-channel/messages", mock_post.call_args[0][0])
+
     @patch("litellm.completion")
     def test_test_llm_channel_returns_success_payload(self, mock_completion) -> None:
         mock_completion.return_value = type(
@@ -1248,6 +1409,8 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             (Exception("TLS certificate verify failed"), "network_error", "tls_error"),
             (Exception("Connection refused"), "network_error", "connection_refused"),
             (Exception("model gpt-4o is not authorized for this account"), "model_not_found", "model_access_denied"),
+            (Exception("litellm.APIError: APIError: OpenAIException - Model disabled."), "model_not_found", "model_access_denied"),
+            (Exception("Model is disabled for this account"), "model_not_found", "model_access_denied"),
             (Exception("LLM Provider NOT provided for model foo"), "model_not_found", "provider_prefix_mismatch"),
         ]
 
@@ -1266,6 +1429,10 @@ class SystemConfigServiceTestCase(unittest.TestCase):
                 self.assertFalse(payload["success"])
                 self.assertEqual(payload["error_code"], error_code)
                 self.assertEqual(payload["details"]["reason"], reason)
+                if reason == "model_access_denied":
+                    self.assertFalse(payload["retryable"])
+                    self.assertEqual(payload["details"]["model"], "openai/gpt-4o-mini")
+                    self.assertEqual(payload["resolved_model"], "openai/gpt-4o-mini")
 
     def test_test_llm_channel_reports_comma_only_api_key_as_missing(self) -> None:
         payload = self.service.test_llm_channel(
