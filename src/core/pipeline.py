@@ -27,7 +27,13 @@ from src.storage import get_db
 from data_provider import DataFetcherManager
 from data_provider.base import normalize_stock_code
 from data_provider.realtime_types import ChipDistribution
-from src.analyzer import GeminiAnalyzer, AnalysisResult, fill_chip_structure_if_needed, fill_price_position_if_needed
+from src.analyzer import (
+    GeminiAnalyzer,
+    AnalysisResult,
+    fill_chip_structure_if_needed,
+    fill_price_position_if_needed,
+    stabilize_decision_with_structure,
+)
 from src.data.stock_mapping import STOCK_NAME_MAP
 from src.notification import NotificationService, NotificationChannel
 from src.report_language import (
@@ -495,6 +501,7 @@ class StockAnalysisPipeline:
             # Step 7.7: price_position fallback
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+                stabilize_decision_with_structure(result, trend_result, fundamental_context)
 
             # Step 8: 保存分析历史记录
             if result and result.success:
@@ -853,6 +860,11 @@ class StockAnalysisPipeline:
             # price_position fallback (same as non-agent path Step 7.7)
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+                realtime_data = initial_context.get("realtime_quote", {})
+                if isinstance(realtime_data, dict):
+                    result.current_price = realtime_data.get("price")
+                    result.change_pct = realtime_data.get("change_pct")
+                stabilize_decision_with_structure(result, trend_result, fundamental_context)
 
             resolved_stock_name = result.name if result and result.name else stock_name
 
@@ -1867,7 +1879,14 @@ class StockAnalysisPipeline:
                     report_content = self.notifier.generate_single_stock_report(result)
                     logger.info(f"[{stock_code}] 使用精简报告格式")
 
-                if self.notifier.send(report_content, email_stock_codes=[stock_code]):
+                if self.notifier.send(
+                    report_content,
+                    email_stock_codes=[stock_code],
+                    route_type="report",
+                    severity="info",
+                    dedup_key=f"report:single:{stock_code}:{report_type.value}",
+                    cooldown_key=f"report:single:{stock_code}:{report_type.value}",
+                ):
                     logger.info(f"[{stock_code}] 单股推送成功")
                 else:
                     logger.warning(f"[{stock_code}] 单股推送失败")
@@ -1902,6 +1921,8 @@ class StockAnalysisPipeline:
             results: 分析结果列表
             skip_push: 是否跳过推送（仅保存到本地，用于单股推送模式）
         """
+        noise_decision = None
+        noise_finalized = False
         try:
             logger.info("生成决策仪表盘日报...")
             report = self._generate_aggregate_report(results, report_type)
@@ -1913,7 +1934,24 @@ class StockAnalysisPipeline:
             # 推送通知
             if self.notifier.is_available():
                 channels = self.notifier.get_available_channels()
+                channels = self.notifier.get_channels_for_route("report", channels=channels)
                 context_success = self.notifier.send_to_context(report)
+                if channels and hasattr(self.notifier, "evaluate_noise_control"):
+                    report_type_key = report_type.value if isinstance(report_type, ReportType) else str(report_type)
+                    codes_key = ",".join(
+                        sorted(str(getattr(result, "code", "") or "") for result in results)
+                    )
+                    noise_key = f"report:aggregate:{report_type_key}:{codes_key}"
+                    noise_decision = self.notifier.evaluate_noise_control(
+                        report,
+                        route_type="report",
+                        severity="info",
+                        dedup_key=noise_key,
+                        cooldown_key=noise_key,
+                    )
+                    if not noise_decision.should_send:
+                        logger.info(noise_decision.message)
+                        return
 
                 # Issue #455: Markdown 转图片（与 notification.send 逻辑一致）
                 from src.md2img import markdown_to_image
@@ -2079,6 +2117,19 @@ class StockAnalysisPipeline:
                         logger.warning(f"未知通知渠道: {channel}")
 
                 success = wechat_success or non_wechat_success or context_success
+                if (
+                    (wechat_success or non_wechat_success)
+                    and noise_decision is not None
+                    and hasattr(self.notifier, "record_noise_control")
+                ):
+                    self.notifier.record_noise_control(noise_decision)
+                    noise_finalized = True
+                elif (
+                    noise_decision is not None
+                    and hasattr(self.notifier, "release_noise_control")
+                ):
+                    self.notifier.release_noise_control(noise_decision)
+                    noise_finalized = True
                 if success:
                     logger.info("决策仪表盘推送成功")
                 else:
@@ -2087,6 +2138,12 @@ class StockAnalysisPipeline:
                 logger.info("通知渠道未配置，跳过推送")
                 
         except Exception as e:
+            if (
+                noise_decision is not None
+                and not noise_finalized
+                and hasattr(self.notifier, "release_noise_control")
+            ):
+                self.notifier.release_noise_control(noise_decision)
             import traceback
             logger.error(f"发送通知失败: {e}\n{traceback.format_exc()}")
 
