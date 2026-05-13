@@ -1881,10 +1881,18 @@ class SystemConfigService:
                 timeout_seconds=timeout_seconds,
             )
             latency_ms = int((time.perf_counter() - started_at) * 1000)
-            success = any(bool(attempt.get("success")) for attempt in attempts)
+            success_count = sum(1 for attempt in attempts if bool(attempt.get("success")))
+            total_count = len(attempts)
+            success = success_count > 0
+            if success_count == total_count and total_count > 0:
+                message = f"自定义 Webhook 通知测试成功（{success_count}/{total_count}）"
+            elif success_count > 0:
+                message = f"自定义 Webhook 通知测试部分成功（{success_count}/{total_count}）"
+            else:
+                message = f"自定义 Webhook 通知测试失败（{success_count}/{total_count}）"
             return self._build_notification_test_result(
                 success=success,
-                message="自定义 Webhook 通知测试成功" if success else "自定义 Webhook 通知测试失败",
+                message=message,
                 error_code=None if success else "send_failed",
                 stage="notification_send",
                 retryable=any(bool(attempt.get("retryable")) for attempt in attempts),

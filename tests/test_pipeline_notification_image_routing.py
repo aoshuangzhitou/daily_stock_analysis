@@ -89,6 +89,19 @@ class TestPipelineEmailGroupImageRouting(unittest.TestCase):
         self.assertIn(["group@example.com"], called_receivers)
         self.assertIn(None, called_receivers)
 
+    @patch("src.md2img.markdown_to_image", return_value=None)
+    def test_send_notifications_email_group_failure_does_not_skip_later_group(self, _mock_md2img):
+        pipeline = self._build_pipeline()
+        pipeline.notifier.send_to_email.side_effect = [RuntimeError("group failed"), True]
+        results = self._make_results()
+
+        pipeline._send_notifications(results, ReportType.SIMPLE)
+
+        self.assertEqual(pipeline.notifier.send_to_email.call_count, 2)
+        called_receivers = [kwargs.get("receivers") for _, kwargs in pipeline.notifier.send_to_email.call_args_list]
+        self.assertIn(["group@example.com"], called_receivers)
+        self.assertIn(None, called_receivers)
+
 
 class _FakeWechatNotifier:
     def __init__(self):
@@ -258,6 +271,36 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
 
         pipeline._send_notifications(results, ReportType.SIMPLE)
 
+        pipeline.notifier.record_noise_control.assert_not_called()
+        pipeline.notifier.release_noise_control.assert_called_once()
+
+    def test_channel_exception_does_not_skip_later_channel_and_records_noise(self):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.notifier = _FakeRoutedNotifier([NotificationChannel.TELEGRAM, NotificationChannel.EMAIL])
+        pipeline.notifier.send_to_telegram.side_effect = RuntimeError("telegram failed")
+        pipeline.notifier.send_to_email.return_value = True
+        pipeline.config = SimpleNamespace(stock_email_groups=[])
+        results = [SimpleNamespace(code="000001")]
+
+        pipeline._send_notifications(results, ReportType.SIMPLE)
+
+        pipeline.notifier.send_to_telegram.assert_called_once_with("report:000001")
+        pipeline.notifier.send_to_email.assert_called_once_with("report:000001")
+        pipeline.notifier.record_noise_control.assert_called_once()
+        pipeline.notifier.release_noise_control.assert_not_called()
+
+    def test_all_static_channel_failures_release_noise_reservation(self):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.notifier = _FakeRoutedNotifier([NotificationChannel.TELEGRAM, NotificationChannel.EMAIL])
+        pipeline.notifier.send_to_telegram.side_effect = RuntimeError("telegram failed")
+        pipeline.notifier.send_to_email.return_value = False
+        pipeline.config = SimpleNamespace(stock_email_groups=[])
+        results = [SimpleNamespace(code="000001")]
+
+        pipeline._send_notifications(results, ReportType.SIMPLE)
+
+        pipeline.notifier.send_to_telegram.assert_called_once_with("report:000001")
+        pipeline.notifier.send_to_email.assert_called_once_with("report:000001")
         pipeline.notifier.record_noise_control.assert_not_called()
         pipeline.notifier.release_noise_control.assert_called_once()
 
