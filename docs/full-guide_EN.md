@@ -1011,6 +1011,7 @@ FastAPI provides RESTful API service for configuration management and triggering
 
 - **Configuration Management** - View/modify watchlist
 - **Quick Analysis** - Trigger stock analysis via API; the Home page also provides a Market Review button that starts a background market recap in Docker/server mode
+- **Strategy selection** - The Home page supports explicitly selecting analysis strategy skills; when `skills` is omitted, analysis uses the server default strategy so legacy clients keep existing behavior
 - **First-run Setup Hint** - The Home page reads the read-only setup status and points users to Settings when required items such as the primary LLM channel or watchlist are missing
 - **Real-time Progress** - Analysis task status updates in real-time, supports parallel tasks; the regular stock-analysis path now prefers LiteLLM streaming during the LLM stage and pushes finer-grained `message/progress` updates through task SSE
 - **Market Review visibility** - After clicking Market Review, the API returns a `task_id` and the UI polls `GET /api/v1/analysis/status/{task_id}` to show progress; completed/failure states are rendered explicitly and failure messages are shown directly in the UI error area.
@@ -1037,6 +1038,8 @@ FastAPI provides RESTful API service for configuration management and triggering
 | `/docs` | GET | API Swagger documentation |
 
 > Note: `POST /api/v1/analysis/analyze` supports only one stock when `async_mode=false`; batch `stock_codes` requires `async_mode=true`. The async `202` response returns a single `task_id` for one stock, or an `accepted` / `duplicates` summary for batch requests.
+> Note: `POST /api/v1/analysis/analyze` accepts `skills` as an array of strategy IDs; if omitted, server defaults are used. The legacy field `strategies` is still accepted for backward compatibility.
+> Note: The Web Home page exposes an explicit strategy selector. When users do not pick one, `skills` is not sent and legacy behavior is preserved; when selected, it is passed through to this endpoint and persisted in task status/history snapshots.
 > Note: `POST /api/v1/analysis/market-review` follows the same runtime configuration path as CLI/Bot market review (`GeminiAnalyzer(config=...)`, search setup, and prompt/rendering pipeline). The provider compatibility path prioritizes `litellm_model` and `llm_model_list`, then falls back to existing legacy keys (`GEMINI_*`, `OPENAI_*`, `ANTHROPIC_*`, `DEEPSEEK_*`) when those are not set; provider names, Base URL, and LiteLLM routing semantics are otherwise unchanged.
 > Audit note: priority and fallback are defined by `Config._load_from_env()` in `src/config.py` (`LITELLM_CONFIG` > `LLM_CHANNELS` > legacy). Regression coverage is in `tests/test_llm_channel_config.py` (configuration source parsing) and `tests/test_market_review_runtime.py` (shared runtime assembly). The endpoint lock is process/host-level only; multi-instance deployments still need external distributed idempotency controls.
 > Note: Once `/api/v1/analysis/market-review` completes, the report is persisted with `report_type=market_review`; open `/api/v1/history` and `/api/v1/history/{record_id}` (or Markdown history endpoints) to view it directly without re-running analysis.
@@ -1065,6 +1068,11 @@ curl http://127.0.0.1:8000/api/health
 curl -X POST http://127.0.0.1:8000/api/v1/analysis/analyze \
   -H 'Content-Type: application/json' \
   -d '{"stock_code": "600519"}'
+
+# pass strategy list (optional)
+curl -X POST http://127.0.0.1:8000/api/v1/analysis/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"stock_code": "600519", "skills": ["bull_trend", "growth_quality"]}'
 
 # Query task status
 curl http://127.0.0.1:8000/api/v1/analysis/status/<task_id>
@@ -1152,10 +1160,10 @@ A: Check if Actions is enabled, and if cron expression is correct (note it's UTC
 
 ## Agent Event Monitor
 
-When `AGENT_EVENT_MONITOR_ENABLED=true`, schedule mode polls the rules in `AGENT_EVENT_ALERT_RULES_JSON` every `AGENT_EVENT_MONITOR_INTERVAL_MINUTES` minutes and sends triggered alerts through the existing notification channels. The runtime currently supports three rule types:
+When `AGENT_EVENT_MONITOR_ENABLED=true`, schedule mode runs the alert worker every `AGENT_EVENT_MONITOR_INTERVAL_MINUTES` minutes. The worker reads enabled rules created through the Alert API and continues to support legacy rules in `AGENT_EVENT_ALERT_RULES_JSON`; triggered alerts still go through the existing notification channels. The runtime currently supports three rule types:
 
 > Compatibility and rollback note: this section documents current Event Monitor rule behavior (including `price_change_percent`) and does not change external model/provider API semantics such as model names, providers, Base URL, LiteLLM, `OPENAI_*`, `DEEPSEEK_*`, or `GEMINI_*` configuration.
-> Rollback is explicit: clear or disable `AGENT_EVENT_MONITOR_ENABLED`/related rule config to restore previous behavior.
+> Legacy JSON is not automatically migrated, deleted, or rewritten. To roll back the background alert worker, clear or disable `AGENT_EVENT_MONITOR_ENABLED`/related rule config.
 
 | `alert_type` | Direction | Threshold | Description |
 | --- | --- | --- | --- |
@@ -1170,6 +1178,8 @@ AGENT_EVENT_MONITOR_ENABLED=true
 AGENT_EVENT_MONITOR_INTERVAL_MINUTES=5
 AGENT_EVENT_ALERT_RULES_JSON=[{"stock_code":"600519","alert_type":"price_cross","direction":"above","price":1800},{"stock_code":"300750","alert_type":"price_change_percent","direction":"down","change_pct":3.0},{"stock_code":"000858","alert_type":"volume_spike","multiplier":2.5}]
 ```
+
+The P2 worker writes `triggered`, `skipped`, `degraded`, and `failed` rows to `alert_triggers` as minimal evaluation history; normal non-triggered checks do not write history. P2 does not write `alert_notifications` and does not execute `cooldown_policy` / `notification_policy`.
 
 ---
 

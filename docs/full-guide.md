@@ -1152,6 +1152,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 
 - 📝 **配置管理** - 查看/修改自选股列表
 - 🚀 **快速分析** - 通过 API 接口触发个股分析；首页也提供“大盘复盘”按钮，可在 Docker/server 模式下后台触发大盘复盘
+- 🎯 **策略选择** - 首页支持显式选择分析策略 skill；不传 `skills` 时按系统默认策略运行，便于保持与历史行为兼容
 - 🧭 **首次配置提示** - 首页会读取只读配置状态，缺少 LLM 主渠道、自选股等基础项时提示缺口并引导进入系统设置
 - 📊 **实时进度** - 分析任务状态实时更新，支持多任务并行；普通分析链路在进入 LLM 阶段后会优先尝试 LiteLLM 流式生成，并通过任务 SSE 回灌更细粒度的 `message/progress`
 - 🗂️ **大盘复盘任务可见性** - 首页触发大盘复盘后会返回 `task_id` 并轮询 `GET /api/v1/analysis/status/{task_id}`，在进行中/完成/失败场景给出可见反馈，失败时直接透出报错内容
@@ -1180,6 +1181,8 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/docs` | GET | API Swagger 文档 |
 
 > 说明：`POST /api/v1/analysis/analyze` 在 `async_mode=false` 时仅支持单只股票；批量 `stock_codes` 需使用 `async_mode=true`。异步 `202` 响应对单股返回 `task_id`，对批量返回 `accepted` / `duplicates` 汇总结构。
+> 说明：`POST /api/v1/analysis/analyze` 支持使用 `skills` 传入策略 skill ID 列表；若未传则按服务端默认策略执行。为兼容历史调用，`strategies` 字段仍作为兼容别名保留。
+> 说明：Web 侧首页策略下拉为显式可选策略入口。用户未手动选择时不会携带 `skills`，与历史客户端行为一致；选择策略后将透传到该接口并在任务状态与历史快照中保留。
 > 说明：`POST /api/v1/analysis/market-review` 采用后端与 CLI/Bot 共用的配置路径（`GeminiAnalyzer(config=...)` 与同样的搜索/提示词构造入口）。Provider 兼容路由会优先识别并使用 `litellm_model`、`llm_model_list`，若未配置则回退 legacy `GEMINI_*`、`OPENAI_*`、`ANTHROPIC_*`、`DEEPSEEK_*` 键；不会新增/调整 provider、Base URL 或 LiteLLM 路由语义。
 > 审计依据：优先级与回退语义以 `src/config.py` 的 `Config._load_from_env()` 为准（`LITELLM_CONFIG` > `LLM_CHANNELS` > legacy）。配套回归见 `tests/test_llm_channel_config.py`（配置源解析）与 `tests/test_market_review_runtime.py`（共享装配路径）。该接口当前仅提供单进程/单机级防重复能力，若为多实例部署需通过外部任务队列或分布式锁补齐全局幂等。
 > 说明：`POST /api/v1/analysis/market-review` 触发后，报告会以 `report_type=market_review` 写入历史库；你可直接查询 `/api/v1/history` 或 `/api/v1/history/{record_id}` 获取历史 Markdown，避免再次触发分析重算。
@@ -1208,6 +1211,11 @@ curl http://127.0.0.1:8000/api/health
 curl -X POST http://127.0.0.1:8000/api/v1/analysis/analyze \
   -H 'Content-Type: application/json' \
   -d '{"stock_code": "600519"}'
+
+# 透传策略（可选）
+curl -X POST http://127.0.0.1:8000/api/v1/analysis/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"stock_code": "600519", "skills": ["bull_trend", "growth_quality"]}'
 
 # 查询任务状态
 curl http://127.0.0.1:8000/api/v1/analysis/status/<task_id>
@@ -1291,9 +1299,9 @@ A: 检查是否启用了 Actions，以及 cron 表达式是否正确（注意是
 
 ## Agent 事件告警监控
 
-`AGENT_EVENT_MONITOR_ENABLED=true` 后，schedule 模式会按 `AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 轮询 `AGENT_EVENT_ALERT_RULES_JSON` 中的规则，并把触发结果发送到现有通知渠道。当前运行时支持三类规则：
+`AGENT_EVENT_MONITOR_ENABLED=true` 后，schedule 模式会按 `AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 运行告警 worker。worker 每轮读取 Alert API 创建并启用的持久化规则，同时继续兼容 `AGENT_EVENT_ALERT_RULES_JSON` 中的 legacy 规则；触发后仍发送到现有通知渠道。当前运行时支持三类规则：
 
-> 兼容与迁移说明：本节记录当前事件告警规则（含 `price_change_percent`）运行时行为，未变更模型名、provider、Base URL、LiteLLM、`OPENAI_*`、`DEEPSEEK_*`、`GEMINI_*` 等外部模型/API 配置语义。若需回退，删除或关闭 `AGENT_EVENT_MONITOR_ENABLED` 即可恢复到旧行为。
+> 兼容与迁移说明：本节记录当前事件告警规则（含 `price_change_percent`）运行时行为，未变更模型名、provider、Base URL、LiteLLM、`OPENAI_*`、`DEEPSEEK_*`、`GEMINI_*` 等外部模型/API 配置语义。legacy JSON 不会被自动迁移、删除或改写；若需回退，删除或关闭 `AGENT_EVENT_MONITOR_ENABLED` 即可停止后台告警 worker。
 
 | `alert_type` | 方向字段 | 阈值字段 | 说明 |
 | --- | --- | --- | --- |
@@ -1308,6 +1316,8 @@ AGENT_EVENT_MONITOR_ENABLED=true
 AGENT_EVENT_MONITOR_INTERVAL_MINUTES=5
 AGENT_EVENT_ALERT_RULES_JSON=[{"stock_code":"600519","alert_type":"price_cross","direction":"above","price":1800},{"stock_code":"300750","alert_type":"price_change_percent","direction":"down","change_pct":3.0},{"stock_code":"000858","alert_type":"volume_spike","multiplier":2.5}]
 ```
+
+P2 worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_triggers` 作为最小评估历史；正常未触发不写历史。P2 不写 `alert_notifications`，也不执行 `cooldown_policy` / `notification_policy`。
 
 ## 持仓管理说明
 
