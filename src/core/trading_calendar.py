@@ -1,21 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-交易日历模块 (Issue #373)
+交易日历模块 (Issue #373 / Issue #1386 P0)
 ===================================
 
 职责：
 1. 按市场（A股/港股/美股）判断当日是否为交易日
 2. 按市场时区取“今日”日期，避免服务器 UTC 导致日期错误
 3. 支持 per-stock 过滤：只分析当日开市市场的股票
+4. 提供 regular-session 市场阶段推断基线，不改变现有分析入口行为
 
-依赖：exchange-calendars（可选，不可用时 fail-open）
+依赖：exchange-calendars（可选，交易日判断不可用时 fail-open，阶段推断不可用时 unknown）
 """
 
 import logging
-from datetime import date, datetime
-from typing import Optional, Set
+from datetime import date, datetime, timedelta
+from enum import Enum
+from typing import Any, Optional, Set
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,23 @@ MARKET_TIMEZONE = {
     "hk": "Asia/Hong_Kong",
     "us": "America/New_York",
 }
+
+# P0 market phase baseline (Issue #1386). This is an intentionally small
+# regular-session inference layer; it does not change existing fail-open
+# trading-day filtering or effective-date behavior.
+_CLOSING_AUCTION_WINDOW_MINUTES = {"cn": 3, "hk": 10, "us": 5}
+
+
+class MarketPhase(str, Enum):
+    """Regular-session market phase labels for Issue #1386 P0."""
+
+    PREMARKET = "premarket"
+    INTRADAY = "intraday"
+    LUNCH_BREAK = "lunch_break"
+    CLOSING_AUCTION = "closing_auction"
+    POSTMARKET = "postmarket"
+    NON_TRADING = "non_trading"
+    UNKNOWN = "unknown"
 
 
 def get_market_for_stock(code: str) -> Optional[str]:
@@ -162,6 +183,113 @@ def get_effective_trading_date(
     except Exception as e:
         logger.warning("trading_calendar.get_effective_trading_date fail-open: %s", e)
         return fallback_date
+
+
+def _as_market_datetime(value: Any, tz_name: str) -> Optional[datetime]:
+    """
+    Convert exchange-calendar timestamps into market-local datetimes.
+
+    Returns None for missing or pandas NaT-like values. Naive datetimes are
+    interpreted as already expressed in the target market timezone, matching
+    get_market_now()'s current_time contract.
+    """
+    if value is None:
+        return None
+    if pd.isna(value):
+        return None
+
+    try:
+        if isinstance(value, pd.Timestamp):
+            if value.tzinfo is None:
+                dt = value.to_pydatetime()
+            else:
+                dt = value.tz_convert(tz_name).to_pydatetime()
+        elif isinstance(value, datetime):
+            dt = value
+        elif hasattr(value, "to_pydatetime"):
+            dt = value.to_pydatetime()
+        else:
+            return None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    tz = ZoneInfo(tz_name)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def infer_market_phase(
+    market: Optional[str], current_time: Optional[datetime] = None
+) -> MarketPhase:
+    """
+    Infer the regular-session market phase for a market.
+
+    This P0 helper is intentionally fail-closed: unknown markets, unavailable
+    exchange calendars, and calendar errors return ``MarketPhase.UNKNOWN``.
+    That differs from ``is_market_open()`` and ``get_effective_trading_date()``,
+    which keep their existing fail-open behavior for backwards compatibility.
+
+    ``premarket`` and ``postmarket`` mean before/after the regular trading
+    session only; they do not imply that extended-hours quote data is available.
+    ``closing_auction`` uses a small per-market near-close heuristic window and
+    does not model full exchange auction microstructure.
+    """
+    if market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE:
+        return MarketPhase.UNKNOWN
+    if not _XCALS_AVAILABLE:
+        return MarketPhase.UNKNOWN
+
+    ex = MARKET_EXCHANGE[market]
+    tz_name = MARKET_TIMEZONE[market]
+    market_now = get_market_now(market, current_time=current_time)
+    local_date = market_now.date()
+
+    try:
+        cal = xcals.get_calendar(ex)
+        if not cal.is_session(local_date):
+            return MarketPhase.NON_TRADING
+
+        session = cal.date_to_session(local_date, direction="previous")
+        session_open = _as_market_datetime(cal.session_open(session), tz_name)
+        session_close = _as_market_datetime(cal.session_close(session), tz_name)
+        if session_open is None or session_close is None:
+            return MarketPhase.UNKNOWN
+
+        if market_now < session_open:
+            return MarketPhase.PREMARKET
+        if market_now >= session_close:
+            return MarketPhase.POSTMARKET
+
+        # Calendars without session_has_break may still expose break timestamps.
+        has_break = True
+        if hasattr(cal, "session_has_break"):
+            has_break = bool(cal.session_has_break(session))
+
+        break_start = None
+        break_end = None
+        if has_break:
+            break_start = _as_market_datetime(cal.session_break_start(session), tz_name)
+            break_end = _as_market_datetime(cal.session_break_end(session), tz_name)
+
+        window_minutes = _CLOSING_AUCTION_WINDOW_MINUTES.get(market, 0)
+        closing_window_start = session_close - timedelta(minutes=window_minutes)
+
+        if break_start is not None and break_end is not None:
+            if market_now < break_start:
+                return MarketPhase.INTRADAY
+            if market_now < break_end:
+                return MarketPhase.LUNCH_BREAK
+            if market_now < closing_window_start:
+                return MarketPhase.INTRADAY
+            return MarketPhase.CLOSING_AUCTION
+
+        if market_now < closing_window_start:
+            return MarketPhase.INTRADAY
+        return MarketPhase.CLOSING_AUCTION
+    except Exception as e:
+        logger.warning("trading_calendar.infer_market_phase fail-closed: %s", e)
+        return MarketPhase.UNKNOWN
 
 
 def get_open_markets_today() -> Set[str]:
