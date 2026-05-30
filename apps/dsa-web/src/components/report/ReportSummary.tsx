@@ -5,6 +5,7 @@ import { ReportStrategy } from './ReportStrategy';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
 import { ReportDiagnostics } from './ReportDiagnostics';
+import { AnalysisContextSummary } from './AnalysisContextSummary';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
 interface ReportSummaryProps {
@@ -48,6 +49,12 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
       <ReportDiagnostics
         recordId={recordId}
         summary={diagnosticSummary}
+        language={reportLanguage}
+      />
+
+      {/* 输入数据块低敏摘要 */}
+      <AnalysisContextSummary
+        overview={details?.analysisContextPackOverview}
         language={reportLanguage}
       />
 

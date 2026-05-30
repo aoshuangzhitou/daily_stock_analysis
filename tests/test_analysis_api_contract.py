@@ -42,6 +42,50 @@ from src.services.image_stock_extractor import _call_litellm_vision
 from src.services.task_queue import AnalysisTaskQueue, TaskStatus
 
 
+def _analysis_context_pack_overview() -> dict:
+    return {
+        "pack_version": "1.0",
+        "created_at": "2026-04-10T08:30:00+00:00",
+        "subject": {
+            "code": "600519",
+            "stock_name": "贵州茅台",
+            "market": "cn",
+        },
+        "blocks": [
+            {
+                "key": "quote",
+                "label": "行情",
+                "status": "available",
+                "source": "mock",
+                "warnings": [],
+                "missing_reasons": [],
+            },
+            {
+                "key": "news",
+                "label": "新闻",
+                "status": "missing",
+                "source": None,
+                "warnings": [],
+                "missing_reasons": ["news_context_missing"],
+            },
+        ],
+        "counts": {
+            "available": 1,
+            "missing": 1,
+            "not_supported": 0,
+            "fallback": 0,
+            "stale": 0,
+            "estimated": 0,
+            "partial": 0,
+        },
+        "warnings": ["news_context_missing"],
+        "metadata": {
+            "trigger_source": "api",
+            "news_result_count": 0,
+        },
+    }
+
+
 class AnalysisApiContractTestCase(unittest.TestCase):
     def test_trigger_market_review_accepts_background_task(self) -> None:
         if trigger_market_review is None or analysis_endpoint_module is None:
@@ -709,6 +753,52 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             },
         )
 
+    def test_handle_sync_analysis_response_exposes_overview(self) -> None:
+        if _handle_sync_analysis is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        overview = _analysis_context_pack_overview()
+        service_instance = MagicMock()
+        service_instance.analyze_stock.return_value = {
+            "stock_code": "600519",
+            "stock_name": "贵州茅台",
+            "report": {
+                "meta": {"stock_code": "600519", "report_language": "zh"},
+                "summary": {"analysis_summary": "summary"},
+                "strategy": {},
+                "details": {"news_summary": "news"},
+            },
+        }
+
+        with patch("uuid.uuid4", return_value=SimpleNamespace(hex="q-sync-overview")), \
+             patch("src.services.analysis_service.AnalysisService", return_value=service_instance), \
+             patch(
+                 "api.v1.endpoints.analysis._load_sync_fundamental_sources",
+                 return_value=(
+                     {
+                         "enhanced_context": {"code": "600519"},
+                         "analysis_context_pack_overview": overview,
+                     },
+                     None,
+                 ),
+             ):
+            result = _handle_sync_analysis(
+                "600519",
+                SimpleNamespace(
+                    report_type="detailed",
+                    force_refresh=False,
+                    notify=True,
+                    skills=None,
+                ),
+            )
+
+        details = result.report["details"]
+        self.assertEqual(
+            details["analysis_context_pack_overview"]["metadata"]["trigger_source"],
+            "api",
+        )
+        self.assertNotIn("analysis_context_pack_overview", details["context_snapshot"])
+
     def test_build_analysis_response_localizes_placeholder_stock_name_for_english(self) -> None:
         service = AnalysisService()
         result = service._build_analysis_response(
@@ -855,6 +945,41 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(report.details.belong_boards, [{"name": "白酒", "type": "行业"}])
         self.assertEqual(report.details.sector_rankings["top"][0]["name"], "白酒")
         self.assertEqual(report.details.sector_rankings["top"][0]["change_pct"], 2.5)
+
+    def test_build_analysis_report_exposes_overview_but_sanitizes_snapshot(self) -> None:
+        if _build_analysis_report is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        overview = _analysis_context_pack_overview()
+        report = _build_analysis_report(
+            report_data={
+                "meta": {},
+                "summary": {},
+                "strategy": {},
+                "details": {"news_summary": "news"},
+            },
+            query_id="q1",
+            stock_code="600519",
+            stock_name="贵州茅台",
+            context_snapshot={
+                "enhanced_context": {"code": "600519"},
+                "analysis_context_pack_overview": overview,
+            },
+            fallback_fundamental_payload=None,
+        )
+
+        self.assertEqual(
+            report.details.analysis_context_pack_overview.metadata.trigger_source,
+            "api",
+        )
+        self.assertEqual(
+            report.details.analysis_context_pack_overview.blocks[1].missing_reasons,
+            ["news_context_missing"],
+        )
+        self.assertNotIn(
+            "analysis_context_pack_overview",
+            report.details.context_snapshot,
+        )
 
     def test_build_analysis_report_merges_partial_top_level_context_with_fallback(self) -> None:
         if _build_analysis_report is None:
@@ -1132,6 +1257,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         if get_analysis_status is None:
             self.skipTest("analysis endpoint helpers unavailable in this environment")
 
+        overview = _analysis_context_pack_overview()
         record = SimpleNamespace(
             id=1,
             code="600519",
@@ -1154,6 +1280,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
                         "price": 1888.0,
                         "change_pct": 1.56,
                     },
+                    "analysis_context_pack_overview": overview,
                 }
             ),
             news_content="news",
@@ -1186,11 +1313,20 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             status.result.report["details"]["sector_rankings"]["top"][0]["name"],
             "白酒",
         )
+        self.assertEqual(
+            status.result.report["details"]["analysis_context_pack_overview"]["metadata"]["trigger_source"],
+            "api",
+        )
+        self.assertNotIn(
+            "analysis_context_pack_overview",
+            status.result.report["details"]["context_snapshot"],
+        )
 
     def test_get_analysis_status_in_memory_task_enriches_agent_snapshot_board_details(self) -> None:
         if get_analysis_status is None:
             self.skipTest("analysis endpoint helpers unavailable in this environment")
 
+        overview = _analysis_context_pack_overview()
         context_snapshot = {
             "fundamental_context": {
                 "belong_boards": [{"name": "白酒", "type": "行业"}],
@@ -1205,6 +1341,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
                 "price": 1888.0,
                 "change_pct": 1.56,
             },
+            "analysis_context_pack_overview": overview,
         }
         task = SimpleNamespace(
             task_id="task_agent_snapshot_in_memory_1",
@@ -1256,6 +1393,14 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(
             status.result.report["details"]["sector_rankings"]["top"][0]["name"],
             "白酒",
+        )
+        self.assertEqual(
+            status.result.report["details"]["analysis_context_pack_overview"]["metadata"]["trigger_source"],
+            "api",
+        )
+        self.assertNotIn(
+            "analysis_context_pack_overview",
+            status.result.report["details"]["context_snapshot"],
         )
         mock_db.get_analysis_history.assert_called_once_with(
             query_id="task_agent_snapshot_in_memory_1",

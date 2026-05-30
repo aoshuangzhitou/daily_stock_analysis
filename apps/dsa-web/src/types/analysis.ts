@@ -97,11 +97,61 @@ export interface SectorRankings {
   bottom?: SectorRankingItem[];
 }
 
+export type AnalysisContextPackBlockStatus =
+  | 'available'
+  | 'missing'
+  | 'not_supported'
+  | 'fallback'
+  | 'stale'
+  | 'estimated'
+  | 'partial';
+
+export interface AnalysisContextPackOverviewSubject {
+  code: string;
+  stockName?: string | null;
+  market?: string | null;
+}
+
+export interface AnalysisContextPackOverviewBlock {
+  key: string;
+  label: string;
+  status: AnalysisContextPackBlockStatus;
+  source?: string | null;
+  warnings: string[];
+  missingReasons: string[];
+}
+
+export interface AnalysisContextPackOverviewCounts {
+  available: number;
+  missing: number;
+  notSupported: number;
+  fallback: number;
+  stale: number;
+  estimated: number;
+  partial: number;
+}
+
+export interface AnalysisContextPackOverviewMetadata {
+  triggerSource?: string | null;
+  newsResultCount?: number | null;
+}
+
+export interface AnalysisContextPackOverview {
+  packVersion: string;
+  createdAt?: string | null;
+  subject: AnalysisContextPackOverviewSubject;
+  blocks: AnalysisContextPackOverviewBlock[];
+  counts: AnalysisContextPackOverviewCounts;
+  warnings: string[];
+  metadata: AnalysisContextPackOverviewMetadata;
+}
+
 /** Details section */
 export interface ReportDetails {
   newsContent?: string;
   rawResult?: Record<string, unknown>;
   contextSnapshot?: Record<string, unknown>;
+  analysisContextPackOverview?: AnalysisContextPackOverview | null;
   financialReport?: Record<string, unknown>;
   dividendMetrics?: Record<string, unknown>;
   belongBoards?: RelatedBoard[];

@@ -27,6 +27,7 @@ def test_analysis_context_pack_doc_has_required_sections() -> None:
         "## P1 内部契约",
         "## P2 Builder 契约",
         "## P3 Runtime Consumption",
+        "## P4 历史记录、任务状态与 Web 可见性",
         "## 字段质量状态",
         "## 现有状态映射",
         "## 七路径盘点",
@@ -246,12 +247,38 @@ def test_analysis_context_pack_doc_defines_p3_runtime_consumption_boundaries() -
         "`analysis_context_pack`",
         "`analysis_context_pack_summary`",
         "Agent 工具级 pack cache 复用",
-        "历史 / 任务状态 / Web 可见性",
-        "P4/P5",
+        "P4 在此基础上新增低敏 overview",
+        "通知展示和数据质量评分仍留给后续阶段",
     ):
         assert token in section
 
     assert "P3-min" not in section
+
+
+def test_analysis_context_pack_doc_defines_p4_visibility_contract() -> None:
+    section = _section(_read_doc(), "P4 历史记录、任务状态与 Web 可见性")
+
+    for token in (
+        "`analysis_context_pack_overview`",
+        "专用 renderer",
+        "`AnalysisContextPack.to_safe_dict()`",
+        "`report.details.analysis_context_pack_overview`",
+        "`analysisContextPackOverview`",
+        "`GET /api/v1/history/{record_id}`",
+        "同步 `POST /api/v1/analysis/analyze`",
+        "completed `GET /api/v1/analysis/status/{task_id}`",
+        "`sanitize_context_snapshot_for_api()`",
+        "`extract_analysis_context_pack_overview()`",
+        "`items.value`",
+        "`trend_result`",
+        "`fundamental_context`",
+        "`SAVE_CONTEXT_SNAPSHOT=false`",
+        "`AnalysisContextSummary`",
+        "不覆盖 pending/processing TaskPanel",
+        "不改通知摘要",
+        "P5 数据质量评分",
+    ):
+        assert token in section
 
 
 def test_analysis_context_pack_doc_maps_existing_status_terms() -> None:
@@ -300,18 +327,19 @@ def test_analysis_context_pack_doc_updates_indexes_and_changelog() -> None:
     index_en = (PROJECT_ROOT / "docs" / "INDEX_EN.md").read_text(encoding="utf-8")
     changelog = (PROJECT_ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert "[分析上下文包契约与运行态消费](analysis-context-pack.md)" in index
-    assert "P1/P2 内部契约、P3 Prompt 摘要消费" in index
+    assert "[分析上下文包契约、运行态消费与可见性](analysis-context-pack.md)" in index
+    assert "P1/P2 内部契约、P3 Prompt 摘要消费、P4 历史/API/Web 低敏可见性" in index
     assert (
-        "[Analysis Context Pack Contract And Runtime Consumption](analysis-context-pack.md) "
-        "<sub><sub>![P3 Badge](https://img.shields.io/badge/P3-yellow?style=flat)</sub></sub> "
+        "[Analysis Context Pack Contract, Runtime Consumption, And Visibility](analysis-context-pack.md) "
+        "<sub><sub>![P4 Badge](https://img.shields.io/badge/P4-orange?style=flat)</sub></sub> "
         "(Chinese-only)"
     ) in index_en
-    assert "P1/P2 internal contracts, P3 prompt-summary consumption" in index_en
-    assert "[文档] 新增 AnalysisContextPack P0 上下文盘点" in changelog
-    assert "[新功能] 新增 AnalysisContextPack P1 内部契约与脱敏序列化测试" in changelog
-    assert "[新功能] 新增 AnalysisContextPack P2 builder" in changelog
-    assert "[新功能] 普通分析与 Agent 运行时 Prompt 接入 AnalysisContextPack 低敏摘要" in changelog
+    assert "P1/P2 internal contracts, P3 prompt-summary consumption, P4 history/API/Web low-sensitivity visibility" in index_en
+    assert "新增 AnalysisContextPack P0 上下文盘点" in changelog
+    assert "新增 AnalysisContextPack P1 内部契约与脱敏序列化测试" in changelog
+    assert "新增 AnalysisContextPack P2 builder" in changelog
+    assert "普通分析与 Agent 运行时 Prompt 接入 AnalysisContextPack 低敏摘要" in changelog
+    assert "AnalysisContextPack P4 低敏 overview 接入历史详情" in changelog
 
 
 def test_full_guides_clarify_pack_summary_does_not_replace_legacy_payload_channels() -> None:
@@ -321,7 +349,13 @@ def test_full_guides_clarify_pack_summary_does_not_replace_legacy_payload_channe
     assert "在这个新增的 pack 摘要区块中" in guide
     assert "不会通过该区块看到完整 `news.content`" in guide
     assert "既有 `news_context`、Agent pre-fetched JSON 和 `enhanced_context` 原始数据通道保持 P3 前行为" in guide
+    assert "`report.details.analysis_context_pack_overview`" in guide
+    assert "completed `/api/v1/analysis/status/{task_id}`" in guide
+    assert "`details.context_snapshot` 会剥离顶层 `analysis_context_pack_overview`" in guide
 
     assert "in this new pack-summary section" in guide_en
     assert "not full `news.content`" in guide_en
     assert "Existing `news_context`, Agent pre-fetched JSON, and `enhanced_context` raw-payload channels keep their pre-P3 behavior" in guide_en
+    assert "`report.details.analysis_context_pack_overview`" in guide_en
+    assert "completed `/api/v1/analysis/status/{task_id}`" in guide_en
+    assert "API `details.context_snapshot` strips the top-level `analysis_context_pack_overview`" in guide_en

@@ -46,6 +46,7 @@ from src.report_language import (
 )
 from src.search_service import SearchService
 from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt_section
+from src.analysis_context_pack_overview import render_analysis_context_pack_overview
 from src.services.social_sentiment_service import SocialSentimentService
 from src.services.analysis_context_builder import (
     AnalysisContextBuilder,
@@ -515,7 +516,10 @@ class StockAnalysisPipeline:
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
-            analysis_context_pack_summary = self._build_analysis_context_pack_summary(
+            (
+                analysis_context_pack_summary,
+                analysis_context_pack_overview,
+            ) = self._build_analysis_context_pack_outputs(
                 self._build_legacy_analysis_artifacts(
                     code=code,
                     stock_name=stock_name,
@@ -613,7 +617,8 @@ class StockAnalysisPipeline:
                         news_content=news_context,
                         news_result_count=news_result_count,
                         realtime_quote=realtime_quote,
-                        chip_data=chip_data
+                        chip_data=chip_data,
+                        analysis_context_pack_overview=analysis_context_pack_overview,
                     )
                     result.diagnostic_context_snapshot = context_snapshot
                     saved_count = self.db.save_analysis_history(
@@ -965,7 +970,10 @@ class StockAnalysisPipeline:
             self._ensure_agent_history(code)
 
             market = get_market_for_stock(normalize_stock_code(code))
-            analysis_context_pack_summary = self._build_analysis_context_pack_summary(
+            (
+                analysis_context_pack_summary,
+                analysis_context_pack_overview,
+            ) = self._build_analysis_context_pack_outputs(
                 self._build_agent_analysis_artifacts(
                     code=code,
                     stock_name=stock_name,
@@ -1090,6 +1098,7 @@ class StockAnalysisPipeline:
                         news_content=initial_context.get("news_context"),
                         realtime_quote=realtime_quote,
                         chip_data=chip_data,
+                        analysis_context_pack_overview=analysis_context_pack_overview,
                     )
                     result.diagnostic_context_snapshot = agent_context_snapshot
                     agent_context_snapshot["stock_name"] = resolved_stock_name
@@ -1722,6 +1731,7 @@ class StockAnalysisPipeline:
         realtime_quote: Any,
         chip_data: Optional[ChipDistribution],
         news_result_count: Optional[int] = None,
+        analysis_context_pack_overview: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         构建分析上下文快照
@@ -1736,6 +1746,8 @@ class StockAnalysisPipeline:
             snapshot["news_retrieval_content"] = news_content
         if news_result_count is not None:
             snapshot["news_result_count"] = news_result_count
+        if analysis_context_pack_overview is not None:
+            snapshot["analysis_context_pack_overview"] = analysis_context_pack_overview
         diagnostic_snapshot = current_diagnostic_snapshot()
         if diagnostic_snapshot is not None:
             snapshot["diagnostics"] = diagnostic_snapshot
@@ -1891,36 +1903,41 @@ class StockAnalysisPipeline:
             },
         )
 
-    def _build_analysis_context_pack_summary(
+    def _build_analysis_context_pack_outputs(
         self,
         artifacts: PipelineAnalysisArtifacts,
         *,
         report_language: str,
         code: str,
         query_id: str,
-    ) -> str:
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
         try:
             pack = AnalysisContextBuilder.build(artifacts)
-            return format_analysis_context_pack_prompt_section(
+            summary = format_analysis_context_pack_prompt_section(
                 pack,
                 report_language=report_language,
             )
+            overview = render_analysis_context_pack_overview(
+                pack,
+                report_language=report_language,
+            )
+            return summary, overview
         except Exception as exc:
             logger.warning(
-                "AnalysisContextPack summary generation failed for %s query_id=%s: %s",
+                "AnalysisContextPack output generation failed for %s query_id=%s: %s",
                 code,
                 query_id,
                 exc,
             )
-            return ""
+            return "", None
 
     @staticmethod
     def _without_runtime_prompt_context(context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Return a shallow copy without runtime-only prompt context.
 
-        Market phase and AnalysisContextPack summaries are prompt inputs only;
-        stable history/task metadata is intentionally left for later phases.
+        Market phase and AnalysisContextPack summaries are prompt inputs only.
+        P4 stores only the separately rendered public overview at snapshot top level.
         """
         sanitized = dict(context)
         sanitized.pop("market_phase_context", None)
@@ -2464,6 +2481,24 @@ class StockAnalysisPipeline:
                 send_context = self.notifier.send_to_context(report)
                 if send_context:
                     _record_channel_result("__context__", True)
+
+                should_broadcast_static = True
+                should_broadcast_static_func = getattr(
+                    self.notifier,
+                    "should_broadcast_static_channels",
+                    None,
+                )
+                if callable(should_broadcast_static_func):
+                    should_broadcast_static = bool(should_broadcast_static_func())
+                if not should_broadcast_static:
+                    if not send_context:
+                        _record_channel_result("__context__", False)
+                    if send_context:
+                        logger.info("决策仪表盘推送成功")
+                    else:
+                        logger.warning("决策仪表盘推送失败")
+                    logger.info("交互式消息上下文回复模式：已跳过静态通知渠道")
+                    return
 
                 if channels and hasattr(self.notifier, "evaluate_noise_control"):
                     report_type_key = report_type.value if isinstance(report_type, ReportType) else str(report_type)

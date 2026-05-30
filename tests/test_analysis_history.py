@@ -38,6 +38,43 @@ from src.analyzer import AnalysisResult
 from src.services.history_service import HistoryService
 import src.auth as auth
 
+
+def _analysis_context_pack_overview() -> dict:
+    return {
+        "pack_version": "1.0",
+        "created_at": "2026-04-10T08:30:00+00:00",
+        "subject": {
+            "code": "600519",
+            "stock_name": "贵州茅台",
+            "market": "cn",
+        },
+        "blocks": [
+            {
+                "key": "quote",
+                "label": "行情",
+                "status": "available",
+                "source": "mock",
+                "warnings": [],
+                "missing_reasons": [],
+            }
+        ],
+        "counts": {
+            "available": 1,
+            "missing": 0,
+            "not_supported": 0,
+            "fallback": 0,
+            "stale": 0,
+            "estimated": 0,
+            "partial": 0,
+        },
+        "warnings": [],
+        "metadata": {
+            "trigger_source": "api",
+            "news_result_count": 2,
+        },
+    }
+
+
 class AnalysisHistoryTestCase(unittest.TestCase):
     """分析历史存储测试"""
 
@@ -643,6 +680,73 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(report.meta.change_pct, 1.56)
         self.assertEqual(report.details.belong_boards, [{"name": "白酒", "type": "行业"}])
         self.assertEqual(report.details.sector_rankings["top"][0]["name"], "白酒")
+
+    def test_history_detail_returns_overview_and_sanitizes_snapshot(self) -> None:
+        """History detail exposes the public overview separately from raw snapshot JSON."""
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        overview = _analysis_context_pack_overview()
+        query_id = "query_context_pack_overview_001"
+        saved = self.db.save_analysis_history(
+            result=self._build_result(),
+            query_id=query_id,
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot={
+                "enhanced_context": {"code": "600519"},
+                "analysis_context_pack_overview": overview,
+            },
+            save_snapshot=True,
+        )
+        self.assertEqual(saved, 1)
+
+        with self.db.get_session() as session:
+            row = session.query(AnalysisHistory).filter(AnalysisHistory.query_id == query_id).first()
+            if row is None:
+                self.fail("未找到保存的历史记录")
+            record_id = row.id
+
+        report = get_history_detail(str(record_id), db_manager=self.db)
+        self.assertEqual(
+            report.details.analysis_context_pack_overview.metadata.trigger_source,
+            "api",
+        )
+        self.assertEqual(report.details.analysis_context_pack_overview.metadata.news_result_count, 2)
+        self.assertNotIn(
+            "analysis_context_pack_overview",
+            report.details.context_snapshot,
+        )
+
+    def test_history_detail_handles_missing_overview_when_snapshot_disabled(self) -> None:
+        """SAVE_CONTEXT_SNAPSHOT=false style records should not require an overview."""
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        query_id = "query_context_pack_snapshot_disabled_001"
+        saved = self.db.save_analysis_history(
+            result=self._build_result(),
+            query_id=query_id,
+            report_type="simple",
+            news_content="新闻摘要",
+            context_snapshot={
+                "enhanced_context": {"code": "600519"},
+                "analysis_context_pack_overview": _analysis_context_pack_overview(),
+            },
+            save_snapshot=False,
+        )
+        self.assertEqual(saved, 1)
+
+        with self.db.get_session() as session:
+            row = session.query(AnalysisHistory).filter(AnalysisHistory.query_id == query_id).first()
+            if row is None:
+                self.fail("未找到保存的历史记录")
+            record_id = row.id
+            self.assertIsNone(row.context_snapshot)
+
+        report = get_history_detail(str(record_id), db_manager=self.db)
+        self.assertIsNone(report.details.analysis_context_pack_overview)
+        self.assertIsNone(report.details.context_snapshot)
 
     def test_history_markdown_localizes_english_report_and_placeholder_name(self) -> None:
         """History markdown should preserve report_language for English reports."""

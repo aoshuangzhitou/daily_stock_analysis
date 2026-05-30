@@ -9,7 +9,7 @@
 2. 定义分析报告完整模型
 """
 
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -142,12 +142,74 @@ class ReportStrategy(BaseModel):
     take_profit: Optional[str] = Field(None, description="止盈价")
 
 
+class AnalysisContextPackOverviewSubject(BaseModel):
+    """AnalysisContextPack 可见摘要标的信息"""
+
+    code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    market: Optional[str] = Field(None, description="市场")
+
+
+class AnalysisContextPackOverviewBlock(BaseModel):
+    """AnalysisContextPack 可见摘要数据块"""
+
+    key: str = Field(..., description="数据块稳定 key")
+    label: str = Field(..., description="数据块展示名称")
+    status: Literal[
+        "available",
+        "missing",
+        "not_supported",
+        "fallback",
+        "stale",
+        "estimated",
+        "partial",
+    ] = Field(..., description="数据块质量状态")
+    source: Optional[str] = Field(None, description="数据来源")
+    warnings: List[str] = Field(default_factory=list, description="数据块告警码")
+    missing_reasons: List[str] = Field(default_factory=list, description="缺失原因")
+
+
+class AnalysisContextPackOverviewCounts(BaseModel):
+    """AnalysisContextPack 可见摘要状态计数"""
+
+    available: int = 0
+    missing: int = 0
+    not_supported: int = 0
+    fallback: int = 0
+    stale: int = 0
+    estimated: int = 0
+    partial: int = 0
+
+
+class AnalysisContextPackOverviewMetadata(BaseModel):
+    """AnalysisContextPack 可见摘要元数据"""
+
+    trigger_source: Optional[str] = Field(None, description="触发来源")
+    news_result_count: Optional[int] = Field(None, description="新闻结果数量")
+
+
+class AnalysisContextPackOverview(BaseModel):
+    """历史/API 可见的低敏 AnalysisContextPack 摘要"""
+
+    pack_version: str = Field(..., description="AnalysisContextPack 版本")
+    created_at: Optional[str] = Field(None, description="创建时间")
+    subject: AnalysisContextPackOverviewSubject
+    blocks: List[AnalysisContextPackOverviewBlock] = Field(default_factory=list)
+    counts: AnalysisContextPackOverviewCounts
+    warnings: List[str] = Field(default_factory=list, description="顶层数据质量提醒")
+    metadata: AnalysisContextPackOverviewMetadata = Field(default_factory=AnalysisContextPackOverviewMetadata)
+
+
 class ReportDetails(BaseModel):
     """报告详情区"""
     
     news_content: Optional[str] = Field(None, description="新闻摘要")
     raw_result: Optional[Any] = Field(None, description="原始分析结果（JSON）")
     context_snapshot: Optional[Any] = Field(None, description="分析时上下文快照（JSON）")
+    analysis_context_pack_overview: Optional[AnalysisContextPackOverview] = Field(
+        None,
+        description="本次分析输入上下文包低敏摘要",
+    )
     financial_report: Optional[Any] = Field(None, description="结构化财报摘要（来自 fundamental_context）")
     dividend_metrics: Optional[Any] = Field(None, description="结构化分红指标（含 TTM 口径）")
     belong_boards: Optional[Any] = Field(None, description="关联板块列表")
