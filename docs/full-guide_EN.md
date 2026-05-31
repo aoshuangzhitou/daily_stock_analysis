@@ -627,6 +627,14 @@ P1a constructs and passes an internal `market_phase_context` through the regular
 
 P1a itself does not change prompt wording, API/Web/Bot parameters, report schemas, stable history/task-status metadata, or quote freshness/data quality semantics. Regular history snapshots and Agent history snapshots strip this runtime-only field. P1b is left to define persistent metadata and task-status display contracts.
 
+### Market Phase Low-Sensitivity Metadata (Issue #1386 P1b)
+
+P1b projects the P1a runtime `market_phase_context` into a stable, low-sensitivity, public `market_phase_summary` and stores it at the top level of `analysis_history.context_snapshot`. History detail, sync analysis responses, and completed `/api/v1/analysis/status/{task_id}` responses return the same market-phase metadata at `report.meta.market_phase_summary`; completed task status does not add a top-level `TaskStatus` field and only exposes it through `status.result.report.meta.market_phase_summary`.
+
+`market_phase_summary` only contains market, phase, market-local time, session date, effective daily-bar date, trading-day / market-open / partial-bar flags, open/close minute estimates, trigger source, analysis intent, and warning codes. It does not expose the full `market_phase_context`, and it does not add quote freshness, fallback, stale, or data-quality scoring fields. `report.details.analysis_context_pack_overview` remains the #1389 input data-block quality overview. API `details.context_snapshot` strips the top-level `market_phase_summary` and `analysis_context_pack_overview` so raw snapshots do not duplicate these stable public fields. When `SAVE_CONTEXT_SNAPSHOT=false` or older history records lack the summary, the field is empty and the report still loads.
+
+P1b does not change prompts, does not add an `analysis_phase` request parameter, does not add Web phase labels or rendering, and does not cover pending/processing TaskPanel state, in-progress SSE events, Bot, notifications, `market_review`, or P3 intraday data-quality fields.
+
 ### Market Phase Prompt Injection (Issue #1386 P2-min)
 
 P2-min starts rendering the runtime market phase into an LLM-readable prompt section for analysis paths that already receive `market_phase_context`. Regular analysis, single Agent, and multi-agent prompts can now see the current phase, market-local time, latest reusable complete daily-bar date, and the minimal phase constraints: pre-market runs must not describe today's price action as already happened, intraday / lunch-break / near-close runs must treat the latest daily bar as potentially unfinished, post-market runs can keep the complete-session recap style, and non-trading or unknown phases should stay conservative.
@@ -641,7 +649,7 @@ P3 itself did not add API/Web/Bot parameters, persist fields into history/task s
 
 ### AnalysisContextPack Low-Sensitivity Visibility (Issue #1389 P4)
 
-P4 adds `report.details.analysis_context_pack_overview`. History detail, sync analysis responses, and completed `/api/v1/analysis/status/{task_id}` responses now return the same low-sensitivity overview; the Web report page renders data-block status, source, warnings, missing reasons, status counts, and news result count after Run Diagnostics and before Strategy. API `details.context_snapshot` strips the top-level `analysis_context_pack_overview` so the raw snapshot panel does not duplicate the public overview.
+P4 adds `report.details.analysis_context_pack_overview`. History detail, sync analysis responses, and completed `/api/v1/analysis/status/{task_id}` responses now return the same low-sensitivity overview; the Web report page renders a collapsed data-block summary after Strategy and News, with available/missing counts, non-zero other status counts, and trigger source in the header and data-block status, source, warnings, missing reasons, status counts, and news result count after expansion. API `details.context_snapshot` strips the top-level `analysis_context_pack_overview` so the raw snapshot panel does not duplicate the public overview.
 
 The overview does not include the full pack, the `analysis_context_pack_summary` prompt string, `items.value`, news body text, `trend_result`, chip, or fundamentals raw payloads. When `SAVE_CONTEXT_SNAPSHOT=false` or older history records lack the overview, the field is empty and the report still loads. This phase does not cover pending/processing TaskPanel, in-progress SSE events, notification summaries, Bot/Desktop-specific rendering, `market_review` overview, or P5 data-quality scoring.
 
@@ -1074,7 +1082,7 @@ FastAPI provides RESTful API service for configuration management and triggering
 - **Real-time Progress** - Analysis task status updates in real-time, supports parallel tasks; the regular stock-analysis path now prefers LiteLLM streaming during the LLM stage and pushes finer-grained `message/progress` updates through task SSE
 - **Market Review visibility** - After clicking Market Review, the API returns a `task_id` and the UI polls `GET /api/v1/analysis/status/{task_id}` to show progress; completed/failure states are rendered explicitly and failure messages are shown directly in the UI error area.
 - **Market review history replay** - Market review results are persisted with `report_type=market_review` and can be reopened from history list/detail or Markdown endpoints directly, without re-triggering a fresh analysis run.
-- **Input data-block visibility** - Regular analysis reports expose a low-sensitivity `AnalysisContextPack` overview through history details, sync responses, and completed task status; the Web report page shows block status, source, missing reasons, and fallback summaries.
+- **Input data-block visibility** - Regular analysis reports expose a low-sensitivity `AnalysisContextPack` overview through history details, sync responses, and completed task status; the Web report page shows the data-block summary collapsed after Strategy and News, with block status, source, missing reasons, and fallback summaries available on expansion.
 - **Backtest Validation** - Evaluate historical analysis accuracy, query direction win rate and simulated returns
 - **API Documentation** - Visit `/docs` for Swagger UI
 
@@ -1105,6 +1113,8 @@ FastAPI provides RESTful API service for configuration management and triggering
 > Note: Once `/api/v1/analysis/market-review` completes, the report is persisted with `report_type=market_review`; open `/api/v1/history` and `/api/v1/history/{record_id}` (or Markdown history endpoints) to view it directly without re-running analysis.
 > Note: when `/api/v1/analysis/market-review` returns a `task_id`, the WebUI polls `GET /api/v1/analysis/status/{task_id}`. The UI renders clear `pending/processing` progress, shows completion feedback when status becomes `completed`, and surfaces `error` content on `failed`.
 > Note: `GET /api/v1/history/{record_id}/diagnostics` accepts either the history primary key ID or `query_id`, and returns a `normal/degraded/failed/unknown` summary, key pipeline components, and sanitized `copy_text`. Older reports without `context_snapshot.diagnostics` return `unknown` without affecting normal report reads.
+> Note: `GET /api/v1/history` list summaries can be paginated by `stock_code` for same-stock history and now include optional trend, summary, model, and analysis-time price/change fields. Older rows without persisted snapshots return empty values. The Web report page's "History Trend" drawer reuses this endpoint.
+> Issue #1520 compatibility note: The `model`/`model_used` returned here is read-only historical snapshot metadata from each record, used only for trend drawer/history display. It does not alter runtime model/model-provider/base URL resolution, config migration, or cleanup semantics in the analysis path. Rollback is by reverting this commit; history query, API response shapes, and UI drawer consumption remain compatible.
 > Note: history detail, sync analysis responses, and completed task status responses expose a low-sensitivity input data-block overview at `report.details.analysis_context_pack_overview`; `details.context_snapshot` strips that top-level field and does not return the full `AnalysisContextPack` or prompt summary.
 
 > Compatibility audit evidence:

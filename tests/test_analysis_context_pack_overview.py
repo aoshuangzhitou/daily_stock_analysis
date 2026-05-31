@@ -214,6 +214,7 @@ def test_extract_and_sanitize_handle_json_snapshot_strings() -> None:
         {
             "enhanced_context": {"code": "600519"},
             "analysis_context_pack_overview": overview,
+            "market_phase_summary": {"phase": "intraday", "market": "cn"},
         },
         ensure_ascii=False,
     )

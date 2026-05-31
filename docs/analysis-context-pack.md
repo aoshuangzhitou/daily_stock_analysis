@@ -119,7 +119,7 @@ P4 持久化面只在 `analysis_history.context_snapshot` 顶层写入 `analysis
 
 API 返回给 Web 的 `details.context_snapshot` 会通过 `sanitize_context_snapshot_for_api()` 剥离顶层 `analysis_context_pack_overview`，避免 raw snapshot 面板重复展示或被当作完整上下文导出；overview 只从 `extract_analysis_context_pack_overview()` 单独取出。Agent 路径与普通分析路径写入同一 overview 形状，Agent 无新闻计数时 `metadata.news_result_count` 可为空。
 
-P4 Web 展示只在报告详情页渲染 `AnalysisContextSummary`，位置在运行诊断之后、策略点位之前，内容包括数据块状态 badge、来源、warning、missing reason、状态计数和新闻结果数。无 overview 时不渲染占位。P4 不覆盖 pending/processing TaskPanel 或 SSE 进行中可见性，不改通知摘要、Bot/Desktop 专属展示、`market_review` overview、P5 数据质量评分或 `fetch_failed` 细分。
+P4 Web 展示只在报告详情页渲染 `AnalysisContextSummary`，位置在策略点位和资讯之后、运行诊断之前；该区域默认折叠，折叠头部展示可用数、缺失数、非零的其他状态计数和触发来源，展开后展示数据块状态 badge、来源、warning、missing reason、状态计数和新闻结果数。无 overview 时不渲染占位。P4 不覆盖 pending/processing TaskPanel 或 SSE 进行中可见性，不改通知摘要、Bot/Desktop 专属展示、`market_review` overview、P5 数据质量评分或 `fetch_failed` 细分。
 
 ## 字段质量状态
 

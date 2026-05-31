@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Database } from 'lucide-react';
+import { ChevronDown, Database } from 'lucide-react';
 import type {
   AnalysisContextPackBlockStatus,
   AnalysisContextPackOverview,
@@ -102,41 +102,33 @@ export const AnalysisContextSummary: React.FC<AnalysisContextSummaryProps> = ({
   const visibleCounts = STATUS_ORDER
     .map((status) => ({ status, value: getCount(overview, status) }))
     .filter((item) => item.value > 0);
+  const summaryCounts = STATUS_ORDER
+    .map((status) => ({ status, value: getCount(overview, status) }))
+    .filter((item) => item.status === 'available' || item.status === 'missing' || item.value > 0);
   const metadataItems = [
-    overview.metadata?.triggerSource
-      ? `${text.triggerSource}: ${overview.metadata.triggerSource}`
-      : null,
     typeof overview.metadata?.newsResultCount === 'number'
       ? `${text.newsResultCount}: ${overview.metadata.newsResultCount}`
       : null,
   ].filter((item): item is string => Boolean(item));
+  const triggerSource = overview.metadata?.triggerSource?.trim();
 
   return (
-    <Card variant="bordered" padding="md" className="home-panel-card">
-      <div data-testid="analysis-context-summary">
-        <DashboardPanelHeader
-          eyebrow={text.eyebrow}
-          title={text.title}
-          leading={(
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan/10 text-cyan">
+    <Card variant="bordered" padding="none" className="home-panel-card">
+      <details data-testid="analysis-context-summary" className="group">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan/10 text-cyan">
               <Database className="h-4 w-4" aria-hidden="true" />
             </span>
-          )}
-          actions={metadataItems.length > 0 ? (
-            <div className="hidden flex-wrap justify-end gap-2 text-xs text-muted-text md:flex">
-              {metadataItems.map((item) => (
-                <span key={item} className="home-accent-chip px-2 py-0.5">
-                  {item}
-                </span>
-              ))}
-            </div>
-          ) : undefined}
-        />
-
-        {visibleCounts.length > 0 ? (
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="label-uppercase">{text.counts}</span>
-            {visibleCounts.map(({ status, value }) => {
+            <span className="min-w-0">
+              <span className="label-uppercase">{text.eyebrow}</span>
+              <span className="mt-0.5 block truncate text-base font-semibold text-foreground">
+                {text.title}
+              </span>
+            </span>
+          </div>
+          <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            {summaryCounts.map(({ status, value }) => {
               const style = STATUS_STYLE[status];
               return (
                 <Badge key={status} variant={style.variant} className="gap-1.5 shadow-none">
@@ -145,61 +137,103 @@ export const AnalysisContextSummary: React.FC<AnalysisContextSummaryProps> = ({
                 </Badge>
               );
             })}
-          </div>
-        ) : null}
-
-        {overview.warnings?.length ? (
-          <div className="mb-3 home-subpanel p-3 text-xs leading-5 text-warning">
-            <span className="font-medium">{text.warnings}: </span>
-            {overview.warnings.join(', ')}
-          </div>
-        ) : null}
-
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-          {overview.blocks.map((block) => {
-            const style = STATUS_STYLE[block.status] || STATUS_STYLE.missing;
-            return (
-              <div key={block.key} className="home-subpanel p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{block.label}</p>
-                    {block.source ? (
-                      <p className="mt-1 truncate text-xs text-secondary-text">
-                        {text.source}: {block.source}
-                      </p>
-                    ) : null}
-                  </div>
-                  <Badge variant={style.variant} className="shrink-0 gap-1.5 shadow-none">
-                    <StatusDot tone={style.tone} className="h-1.5 w-1.5" />
-                    {text.status[block.status] || block.status}
-                  </Badge>
-                </div>
-
-                {block.warnings?.length ? (
-                  <p className="mt-2 text-xs leading-5 text-warning">
-                    {text.warnings}: {block.warnings.join(', ')}
-                  </p>
-                ) : null}
-                {block.missingReasons?.length ? (
-                  <p className="mt-2 text-xs leading-5 text-muted-text">
-                    {text.missingReasons}: {block.missingReasons.join(', ')}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-
-        {metadataItems.length > 0 ? (
-          <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-text md:hidden">
-            {metadataItems.map((item) => (
-              <span key={item} className="home-accent-chip px-2 py-0.5">
-                {item}
+            {triggerSource ? (
+              <span className="home-accent-chip px-2 py-0.5 text-xs text-muted-text">
+                {text.triggerSource}: {triggerSource}
               </span>
-            ))}
+            ) : null}
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-text transition-transform group-open:rotate-180" aria-hidden="true" />
+          </span>
+        </summary>
+
+        <div className="home-divider border-t px-4 pb-4 pt-3">
+          <DashboardPanelHeader
+            eyebrow={text.eyebrow}
+            title={text.title}
+            leading={(
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan/10 text-cyan">
+                <Database className="h-4 w-4" aria-hidden="true" />
+              </span>
+            )}
+            actions={metadataItems.length > 0 ? (
+              <div className="hidden flex-wrap justify-end gap-2 text-xs text-muted-text md:flex">
+                {metadataItems.map((item) => (
+                  <span key={item} className="home-accent-chip px-2 py-0.5">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            ) : undefined}
+          />
+
+          {visibleCounts.length > 0 ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="label-uppercase">{text.counts}</span>
+              {visibleCounts.map(({ status, value }) => {
+                const style = STATUS_STYLE[status];
+                return (
+                  <Badge key={status} variant={style.variant} className="gap-1.5 shadow-none">
+                    <StatusDot tone={style.tone} className="h-1.5 w-1.5" />
+                    {text.status[status]} {value}
+                  </Badge>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {overview.warnings?.length ? (
+            <div className="mb-3 home-subpanel p-3 text-xs leading-5 text-warning">
+              <span className="font-medium">{text.warnings}: </span>
+              {overview.warnings.join(', ')}
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {overview.blocks.map((block) => {
+              const style = STATUS_STYLE[block.status] || STATUS_STYLE.missing;
+              return (
+                <div key={block.key} className="home-subpanel p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">{block.label}</p>
+                      {block.source ? (
+                        <p className="mt-1 truncate text-xs text-secondary-text">
+                          {text.source}: {block.source}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Badge variant={style.variant} className="shrink-0 gap-1.5 shadow-none">
+                      <StatusDot tone={style.tone} className="h-1.5 w-1.5" />
+                      {text.status[block.status] || block.status}
+                    </Badge>
+                  </div>
+
+                  {block.warnings?.length ? (
+                    <p className="mt-2 text-xs leading-5 text-warning">
+                      {text.warnings}: {block.warnings.join(', ')}
+                    </p>
+                  ) : null}
+                  {block.missingReasons?.length ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-text">
+                      {text.missingReasons}: {block.missingReasons.join(', ')}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
-        ) : null}
-      </div>
+
+          {metadataItems.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-text md:hidden">
+              {metadataItems.map((item) => (
+                <span key={item} className="home-accent-chip px-2 py-0.5">
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </details>
     </Card>
   );
 };

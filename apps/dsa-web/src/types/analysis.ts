@@ -37,6 +37,31 @@ export interface MarketReviewAccepted {
 
 export type ReportLanguage = 'zh' | 'en';
 
+export type MarketPhaseValue =
+  | 'premarket'
+  | 'intraday'
+  | 'lunch_break'
+  | 'closing_auction'
+  | 'postmarket'
+  | 'non_trading'
+  | 'unknown';
+
+export interface MarketPhaseSummary {
+  market?: string | null;
+  phase: MarketPhaseValue;
+  marketLocalTime?: string | null;
+  sessionDate?: string | null;
+  effectiveDailyBarDate?: string | null;
+  isTradingDay?: boolean | null;
+  isMarketOpenNow?: boolean | null;
+  isPartialBar?: boolean | null;
+  minutesToOpen?: number | null;
+  minutesToClose?: number | null;
+  triggerSource?: string | null;
+  analysisIntent?: string | null;
+  warnings: string[];
+}
+
 /** Report metadata */
 export interface ReportMeta {
   id?: number;  // Analysis history record ID, present for persisted reports
@@ -48,7 +73,8 @@ export interface ReportMeta {
   createdAt: string;
   currentPrice?: number;
   changePct?: number;
-  modelUsed?: string;  // LLM model used for analysis
+  modelUsed?: string;  // Display-only model snapshot from persisted history; not used for runtime model selection
+  marketPhaseSummary?: MarketPhaseSummary | null;
 }
 
 /** Sentiment label */
@@ -300,9 +326,24 @@ export interface HistoryItem {
   stockCode: string;
   stockName?: string;
   reportType?: ReportType;
+  trendPrediction?: string;
+  analysisSummary?: string;
   sentimentScore?: number;
   operationAdvice?: string;
+  currentPrice?: number;
+  changePct?: number;
+  volumeRatio?: number;
+  turnoverRate?: number;
+  modelUsed?: string;  // Display-only model snapshot from persisted history; runtime provider/model/base URL still come from analyzer configuration
   createdAt: string;
+}
+
+export type StockHistoryRange = 'all' | '30d' | '90d';
+
+export interface StockHistoryFilters {
+  range: StockHistoryRange;
+  model: string;
+  sort: 'desc' | 'asc';
 }
 
 /** History list response */

@@ -274,11 +274,16 @@ def test_analysis_context_pack_doc_defines_p4_visibility_contract() -> None:
         "`fundamental_context`",
         "`SAVE_CONTEXT_SNAPSHOT=false`",
         "`AnalysisContextSummary`",
+        "位置在策略点位和资讯之后、运行诊断之前",
+        "默认折叠",
+        "非零的其他状态计数",
         "不覆盖 pending/processing TaskPanel",
         "不改通知摘要",
         "P5 数据质量评分",
     ):
         assert token in section
+
+    assert "运行诊断之后、策略点位之前" not in section
 
 
 def test_analysis_context_pack_doc_maps_existing_status_terms() -> None:
@@ -340,6 +345,7 @@ def test_analysis_context_pack_doc_updates_indexes_and_changelog() -> None:
     assert "新增 AnalysisContextPack P2 builder" in changelog
     assert "普通分析与 Agent 运行时 Prompt 接入 AnalysisContextPack 低敏摘要" in changelog
     assert "AnalysisContextPack P4 低敏 overview 接入历史详情" in changelog
+    assert "优化 Web 报告详情页信息层级" in changelog
 
 
 def test_full_guides_clarify_pack_summary_does_not_replace_legacy_payload_channels() -> None:
@@ -351,11 +357,21 @@ def test_full_guides_clarify_pack_summary_does_not_replace_legacy_payload_channe
     assert "既有 `news_context`、Agent pre-fetched JSON 和 `enhanced_context` 原始数据通道保持 P3 前行为" in guide
     assert "`report.details.analysis_context_pack_overview`" in guide
     assert "completed `/api/v1/analysis/status/{task_id}`" in guide
+    assert "Web 端报告页在“策略点位”和“资讯”之后展示默认折叠的数据块摘要" in guide
+    assert "折叠头部展示可用数、缺失数、非零的其他状态计数和触发来源" in guide
+    assert "Web 报告页在策略点位和资讯之后默认折叠展示数据块状态" in guide
     assert "`details.context_snapshot` 会剥离顶层 `analysis_context_pack_overview`" in guide
+    assert "`report.meta.market_phase_summary`" in guide
+    assert "`details.context_snapshot` 会剥离顶层 `market_phase_summary`" in guide
 
     assert "in this new pack-summary section" in guide_en
     assert "not full `news.content`" in guide_en
     assert "Existing `news_context`, Agent pre-fetched JSON, and `enhanced_context` raw-payload channels keep their pre-P3 behavior" in guide_en
     assert "`report.details.analysis_context_pack_overview`" in guide_en
     assert "completed `/api/v1/analysis/status/{task_id}`" in guide_en
+    assert "the Web report page renders a collapsed data-block summary after Strategy and News" in guide_en
+    assert "available/missing counts, non-zero other status counts, and trigger source" in guide_en
+    assert "the Web report page shows the data-block summary collapsed after Strategy and News" in guide_en
     assert "API `details.context_snapshot` strips the top-level `analysis_context_pack_overview`" in guide_en
+    assert "`report.meta.market_phase_summary`" in guide_en
+    assert "API `details.context_snapshot` strips the top-level `market_phase_summary`" in guide_en

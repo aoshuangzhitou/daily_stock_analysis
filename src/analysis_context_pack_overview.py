@@ -14,6 +14,7 @@ from src.analysis_context_pack_prompt import (
     get_analysis_context_pack_block_labels,
     iter_analysis_context_pack_block_keys,
 )
+from src.market_phase_summary import MARKET_PHASE_SUMMARY_KEY
 from src.schemas.analysis_context_pack import ContextFieldStatus
 
 
@@ -99,11 +100,12 @@ def extract_analysis_context_pack_overview(context_snapshot: Any) -> Optional[Di
 
 
 def sanitize_context_snapshot_for_api(context_snapshot: Any) -> Any:
-    """Return a context snapshot without the separately exposed overview field."""
+    """Return a context snapshot without separately exposed public summary fields."""
     snapshot = _as_mapping(context_snapshot)
     if snapshot is not None:
         sanitized = dict(snapshot)
         sanitized.pop(ANALYSIS_CONTEXT_PACK_OVERVIEW_KEY, None)
+        sanitized.pop(MARKET_PHASE_SUMMARY_KEY, None)
         return sanitized
     return context_snapshot
 
