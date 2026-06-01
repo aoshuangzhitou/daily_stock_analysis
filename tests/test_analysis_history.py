@@ -66,6 +66,20 @@ def _analysis_context_pack_overview() -> dict:
             "stale": 0,
             "estimated": 0,
             "partial": 0,
+            "fetch_failed": 0,
+        },
+        "data_quality": {
+            "overall_score": 100,
+            "level": "good",
+            "block_scores": {
+                "quote": 100,
+                "daily_bars": 100,
+                "technical": 100,
+                "news": 100,
+                "fundamentals": 100,
+                "chip": 100,
+            },
+            "limitations": [],
         },
         "warnings": [],
         "metadata": {
@@ -900,6 +914,10 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(
             report.details.analysis_context_pack_overview.metadata.trigger_source,
             "api",
+        )
+        self.assertEqual(
+            report.details.analysis_context_pack_overview.data_quality.overall_score,
+            100,
         )
         self.assertIsNotNone(report.meta.market_phase_summary)
         self.assertEqual(report.meta.market_phase_summary.phase, "intraday")

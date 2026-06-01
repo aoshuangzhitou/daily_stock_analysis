@@ -37,6 +37,14 @@ const overview: AnalysisContextPackOverview = {
       warnings: ['news_provider_timeout'],
       missingReasons: ['news_context_missing'],
     },
+    {
+      key: 'fundamentals',
+      label: '基本面',
+      status: 'fetch_failed',
+      source: 'fundamental_pipeline',
+      warnings: [],
+      missingReasons: ['fundamental_pipeline_failed'],
+    },
   ],
   counts: {
     available: 1,
@@ -46,6 +54,20 @@ const overview: AnalysisContextPackOverview = {
     stale: 0,
     estimated: 0,
     partial: 0,
+    fetchFailed: 1,
+  },
+  dataQuality: {
+    overallScore: 82,
+    level: 'usable',
+    blockScores: {
+      quote: 100,
+      daily_bars: 100,
+      technical: 100,
+      news: 35,
+      fundamentals: 25,
+      chip: 100,
+    },
+    limitations: ['fundamentals: fetch_failed'],
   },
   warnings: ['intraday_realtime_overlay'],
   metadata: {
@@ -67,6 +89,8 @@ describe('AnalysisContextSummary', () => {
     expect(within(panel).getAllByText('输入数据块')[0]).toBeVisible();
     expect(screen.getAllByText('可用 1')[0]).toBeVisible();
     expect(screen.getAllByText('缺失 1')[0]).toBeVisible();
+    expect(screen.getAllByText('抓取失败 1')[0]).toBeVisible();
+    expect(screen.getAllByText('质量分 82/100 可用')[0]).toBeVisible();
     expect(screen.getByText('触发来源: api')).toBeVisible();
     expect(screen.getByText('来源: mock_quote')).not.toBeVisible();
 
@@ -77,8 +101,11 @@ describe('AnalysisContextSummary', () => {
     expect(screen.getByText('来源: mock_quote')).toBeVisible();
     expect(screen.getByText('告警:')).toBeInTheDocument();
     expect(screen.getByText(/intraday_realtime_overlay/)).toBeInTheDocument();
+    expect(screen.getByText('数据限制:')).toBeInTheDocument();
+    expect(screen.getByText(/基本面：抓取失败/)).toBeInTheDocument();
     expect(screen.getByText(/news_provider_timeout/)).toBeInTheDocument();
     expect(screen.getByText(/news_context_missing/)).toBeInTheDocument();
+    expect(screen.getByText(/fundamental_pipeline_failed/)).toBeInTheDocument();
     expect(screen.getAllByText('新闻结果数: 3').some((item) => item.textContent === '新闻结果数: 3')).toBe(true);
   });
 
@@ -90,7 +117,14 @@ describe('AnalysisContextSummary', () => {
     expect(screen.getAllByText('Input Blocks')[0]).toBeVisible();
     expect(screen.getAllByText('Available 1')[0]).toBeVisible();
     expect(screen.getAllByText('Missing 1')[0]).toBeVisible();
+    expect(screen.getAllByText('Fetch failed 1')[0]).toBeVisible();
+    expect(screen.getAllByText('Quality 82/100 Usable')[0]).toBeVisible();
     expect(screen.getByText('Trigger: api')).toBeVisible();
+
+    fireEvent.click(within(panel).getAllByText('Input Blocks')[0]);
+
+    expect(screen.getByText('Data Limitations:')).toBeInTheDocument();
+    expect(screen.getByText(/fundamentals: Fetch failed/)).toBeInTheDocument();
   });
 
   it('surfaces degraded non-zero states in the collapsed summary', () => {
@@ -122,6 +156,7 @@ describe('AnalysisContextSummary', () => {
         stale: 1,
         estimated: 0,
         partial: 0,
+        fetchFailed: 0,
       },
     };
 

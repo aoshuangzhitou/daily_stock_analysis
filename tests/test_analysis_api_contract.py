@@ -77,6 +77,20 @@ def _analysis_context_pack_overview() -> dict:
             "stale": 0,
             "estimated": 0,
             "partial": 0,
+            "fetch_failed": 0,
+        },
+        "data_quality": {
+            "overall_score": 88,
+            "level": "good",
+            "block_scores": {
+                "quote": 100,
+                "daily_bars": 100,
+                "technical": 100,
+                "news": 35,
+                "fundamentals": 100,
+                "chip": 100,
+            },
+            "limitations": [],
         },
         "warnings": ["news_context_missing"],
         "metadata": {
@@ -818,6 +832,10 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             details["analysis_context_pack_overview"]["metadata"]["trigger_source"],
             "api",
         )
+        self.assertEqual(
+            details["analysis_context_pack_overview"]["data_quality"]["overall_score"],
+            88,
+        )
         self.assertNotIn("analysis_context_pack_overview", details["context_snapshot"])
         self.assertNotIn("market_phase_summary", details["context_snapshot"])
 
@@ -1000,6 +1018,10 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(
             report.details.analysis_context_pack_overview.metadata.trigger_source,
             "api",
+        )
+        self.assertEqual(
+            report.details.analysis_context_pack_overview.data_quality.overall_score,
+            88,
         )
         self.assertEqual(
             report.details.analysis_context_pack_overview.blocks[1].missing_reasons,
@@ -1359,6 +1381,10 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             status.result.report["details"]["analysis_context_pack_overview"]["metadata"]["trigger_source"],
             "api",
         )
+        self.assertEqual(
+            status.result.report["details"]["analysis_context_pack_overview"]["data_quality"]["overall_score"],
+            88,
+        )
         self.assertNotIn(
             "analysis_context_pack_overview",
             status.result.report["details"]["context_snapshot"],
@@ -1449,6 +1475,10 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         self.assertEqual(
             status.result.report["details"]["analysis_context_pack_overview"]["metadata"]["trigger_source"],
             "api",
+        )
+        self.assertEqual(
+            status.result.report["details"]["analysis_context_pack_overview"]["data_quality"]["overall_score"],
+            88,
         )
         self.assertNotIn(
             "analysis_context_pack_overview",

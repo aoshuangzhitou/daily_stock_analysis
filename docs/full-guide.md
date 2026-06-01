@@ -764,6 +764,12 @@ P2-min 开始在已获得 `market_phase_context` 的分析路径中，把运行�
 
 P2-min 仍不新增 API/Web/Bot 参数，不写入 history/task status/report metadata，不改变报告 JSON schema，也不引入完整 quote freshness、fallback、stale 或 data_quality 契约。Bot/API 直连 Agent 若未经过 P1a pipeline 构建 `market_phase_context`，仍保持旧行为；入口透传和可见展示留给后续 P4+。
 
+#### 盘中数据包与实时质量控制（Issue #1386 P3）
+
+P3 补齐普通分析主路径使用的实时行情质量元数据，但仍不新增 `analysis_phase` 参数，不改 API/Web/Bot 阶段入口，不改变报告 JSON schema，也不做 #1389 P5 数据质量评分或模型置信度限制。实时 quote 会带上 `fetched_at`、`provider_timestamp`、`is_stale`、`stale_seconds`、`fallback_from`；其中 `fetched_at` 是系统获取时间，`provider_timestamp` 只在 provider 真实提供行情时间时填写。缺少 provider 时间时不会伪造 fresh，`stale_seconds` 和 `is_stale` 保持空值。
+
+整源 fallback 的语义固定为：`source` 保留实际成功的数据源 token，`fallback_from` 记录本轮失败的最高优先级整源 token；首选源成功后只从后续源补字段时不写 `fallback_from`。`AnalysisContextBuilder` 只映射这些上游 artifact，不重新取数、不做质量评分；quote block 状态按 `STALE > FALLBACK > AVAILABLE` 归并。盘中实时价覆盖 `today` 时会标记 `is_partial_bar`、`is_estimated`、`estimated_fields`、`realtime_source` 和 quote 元数据；`daily_bars` block 仍表示 storage 中完整日线窗口，partial/estimated 只进入 technical block。freshness scoring、盘中 cache TTL 分级、Agent 工具级复用和 API/Web 展示留给后续阶段。
+
 #### AnalysisContextPack Prompt 摘要（Issue #1389 P3）
 
 P3 在普通分析和 Agent 初始上下文中接入 `AnalysisContextPack` 低敏摘要。Pipeline 会用已获取的行情、日线、趋势、筹码、基本面、新闻和市场阶段 artifacts 组装 pack，再把 `analysis_context_pack_summary` 插入 Prompt；在这个新增的 pack 摘要区块中，LLM 只看到 subject、版本、各数据块的状态/来源/warning/missing reason 和新闻结果数，不会通过该区块看到完整 `news.content`、`trend_result`、筹码或基本面原始 payload。既有 `news_context`、Agent pre-fetched JSON 和 `enhanced_context` 原始数据通道保持 P3 前行为，不由本摘要替代或脱敏。
@@ -774,7 +780,15 @@ P3 当时不新增 API/Web/Bot 参数，不写入 history/task status/report met
 
 P4 新增 `report.details.analysis_context_pack_overview`，历史详情、同步分析响应和 completed `/api/v1/analysis/status/{task_id}` 都会返回同一份低敏 overview；Web 端报告页在“策略点位”和“资讯”之后展示默认折叠的数据块摘要，折叠头部展示可用数、缺失数、非零的其他状态计数和触发来源，展开后展示数据块状态、来源、warning、missing reason、状态计数和新闻结果数。API 返回的 `details.context_snapshot` 会剥离顶层 `analysis_context_pack_overview`，避免透明度面板重复展示 raw snapshot。
 
-该 overview 不包含完整 pack、`analysis_context_pack_summary` Prompt 字符串、`items.value`、新闻正文、`trend_result`、筹码或基本面原始 payload。`SAVE_CONTEXT_SNAPSHOT=false` 或旧历史记录缺少 overview 时字段为空，报告仍正常返回。本阶段不覆盖 pending/processing TaskPanel、SSE 进行中事件、通知摘要、Bot/Desktop 专属展示、`market_review` overview 或 P5 数据质量评分。
+该 overview 不包含完整 pack、`analysis_context_pack_summary` Prompt 字符串、`items.value`、新闻正文、`trend_result`、筹码或基本面原始 payload。`SAVE_CONTEXT_SNAPSHOT=false` 或旧历史记录缺少 overview 时字段为空，报告仍正常返回。本阶段不覆盖 pending/processing TaskPanel、SSE 进行中事件、通知摘要、Bot/Desktop 专属展示、`market_review` overview 或数据质量评分。
+
+#### AnalysisContextPack 数据质量评分与 Prompt 数据限制（Issue #1389 P5）
+
+P5 在不修改 `PACK_VERSION = "1.0"`、不新增数据源和不改变报告 JSON schema 的前提下，给 `AnalysisContextPack` 增加轻量数据质量评分与模型可读的数据限制区块。`ContextFieldStatus` 新增 `fetch_failed`，只表示字段或数据块本次抓取明确失败；首版仅把 `fundamental_context.status == "failed"` 映射为 `fetch_failed`，空新闻、未配置搜索、无实时 quote 或 chip 缺失仍按既有 `missing` / `not_supported` 处理。
+
+`DataQuality` 现在包含 `overall_score`、`level`、`block_scores`、`limitations`，并保留旧 `warnings` / `metadata`。评分固定覆盖 `quote`、`daily_bars`、`technical`、`news`、`fundamentals`、`chip` 六块，不因辅助块缺失重归一化；核心块降级会在 Prompt 的“数据限制”区块中要求模型不要输出高置信度，辅助块缺失只限制对应分析段落，不应被解释为利好或利空。该 Prompt 区块由 `format_analysis_context_pack_prompt_section()` 统一生成，普通分析、single Agent 和 multi-agent 沿用同一低敏 summary，不暴露 raw payload、新闻正文、趋势原始值、secret、token 或 webhook。
+
+历史详情、同步分析响应和 completed 任务状态继续只通过 `report.details.analysis_context_pack_overview` 暴露低敏字段；P5 只在该 overview 下新增 `data_quality`，包含 score、level、block_scores 和 limitations，不重复公开 `warnings`。Web 报告页仍默认折叠展示数据块摘要，折叠头部新增质量分/等级，展开后展示限制说明和 `fetch_failed` 状态；`details.context_snapshot` 继续剥离顶层 `analysis_context_pack_overview`。
 
 #### 使用 Crontab
 

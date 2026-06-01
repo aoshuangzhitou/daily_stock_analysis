@@ -110,6 +110,7 @@ class SystemConfigService:
             "skill": "specialist",
         }
     }
+    _SERVER_MASKED_CONFIG_KEYS: Set[str] = {"ALPHASIFT_INSTALL_SPEC"}
     _NOTIFICATION_TEST_CHANNELS: Tuple[str, ...] = (
         "wechat",
         "feishu",
@@ -326,11 +327,15 @@ class SystemConfigService:
             raw_value = config_map.get(key, "")
             field_schema = schema_by_key[key]
             display_value = self._resolve_display_value(raw_value, field_schema, raw_value_exists)
+            is_masked = False
+            if key in self._SERVER_MASKED_CONFIG_KEYS and display_value:
+                display_value = mask_token
+                is_masked = True
             item: Dict[str, Any] = {
                 "key": key,
                 "value": display_value,
                 "raw_value_exists": raw_value_exists,
-                "is_masked": False,
+                "is_masked": is_masked,
             }
             if include_schema:
                 item["schema"] = field_schema
