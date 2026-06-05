@@ -280,6 +280,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             search_service=runtime_search,
             send_notification=False,
             override_region="cn,us",
+            return_structured=True,
         )
 
     def test_market_review_runtime_initializes_analyzer_for_litellm_provider(self) -> None:
@@ -331,6 +332,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             search_service=runtime_search,
             send_notification=False,
             override_region="cn",
+            return_structured=True,
         )
 
     def test_get_analysis_status_returns_market_review_report_from_queue(self) -> None:
@@ -344,7 +346,10 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             stock_name="大盘复盘",
             status=analysis_endpoint_module.TaskStatusEnum.COMPLETED,
             progress=100,
-            result={"result": "市场复盘报告示例文本"},
+            result={
+                "result": "市场复盘报告示例文本",
+                "market_review_payload": {"kind": "market_review", "sections": []},
+            },
             error=None,
             original_query=None,
             selection_source=None,
@@ -356,6 +361,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
 
         self.assertEqual(status.status, "completed")
         self.assertEqual(status.market_review_report, "市场复盘报告示例文本")
+        self.assertEqual(status.market_review_payload["kind"], "market_review")
         self.assertIsNone(status.result)
 
     def test_get_analysis_status_normalizes_completed_queue_result_contract(self) -> None:

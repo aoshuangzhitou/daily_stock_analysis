@@ -148,12 +148,18 @@ def _run_market_review_background(
             "search_service": search_service,
             "send_notification": send_notification,
             "override_region": override_region,
+            "return_structured": True,
         }
         if query_id:
             review_kwargs["query_id"] = query_id
         report = run_market_review(**review_kwargs)
         if not report:
             raise RuntimeError("大盘复盘未返回可持久化报告")
+        if hasattr(report, "report"):
+            return {
+                "result": report.report,
+                "market_review_payload": getattr(report, "market_review_payload", None),
+            }
         return {"result": report}
     finally:
         _release_market_review_lock(lock_token)
@@ -849,12 +855,16 @@ def get_analysis_status(task_id: str) -> TaskStatus:
     if task:
         result: Optional[AnalysisResultResponse] = None
         market_review_report = None
+        market_review_payload = None
 
         if task.status == TaskStatusEnum.COMPLETED and isinstance(task.result, dict):
             if task.stock_code == "market_review":
                 report_text = task.result.get("result")
                 if isinstance(report_text, str) and report_text.strip():
                     market_review_report = report_text
+                payload = task.result.get("market_review_payload")
+                if isinstance(payload, dict):
+                    market_review_payload = payload
             else:
                 try:
                     result = _build_task_analysis_result(task)
@@ -871,6 +881,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             progress=task.progress,
             result=result,
             market_review_report=market_review_report,
+            market_review_payload=market_review_payload,
             error=task.error,
             stock_name=task.stock_name,
             original_query=task.original_query,
@@ -890,6 +901,12 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             raw_result = parse_json_field(record.raw_result)
             if getattr(record, "report_type", None) == "market_review":
                 market_review_report = None
+                context_snapshot = parse_json_field(getattr(record, "context_snapshot", None))
+                market_review_payload = None
+                if isinstance(context_snapshot, dict):
+                    payload = context_snapshot.get("market_review_payload")
+                    if isinstance(payload, dict):
+                        market_review_payload = payload
                 if isinstance(raw_result, dict):
                     report_text = raw_result.get("raw_response") or raw_result.get("market_review_report")
                     if isinstance(report_text, str) and report_text.strip():
@@ -904,6 +921,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     progress=100,
                     result=None,
                     market_review_report=market_review_report,
+                    market_review_payload=market_review_payload,
                     error=None,
                     stock_name=record.name,
                 )

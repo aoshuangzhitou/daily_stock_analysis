@@ -125,6 +125,56 @@ export interface SectorRankings {
   bottom?: SectorRankingItem[];
 }
 
+export interface MarketReviewPayloadSection {
+  key?: string;
+  title: string;
+  markdown: string;
+}
+
+export interface MarketReviewIndex {
+  code: string;
+  name: string;
+  current?: number;
+  change?: number;
+  changePct?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  volume?: number;
+  amount?: number;
+  amplitude?: number;
+}
+
+export interface MarketReviewBreadth {
+  upCount?: number;
+  downCount?: number;
+  flatCount?: number;
+  limitUpCount?: number;
+  limitDownCount?: number;
+  totalAmount?: number;
+  turnoverUnit?: string;
+}
+
+export interface MarketReviewPayload {
+  version?: number;
+  kind?: 'market_review' | string;
+  region?: string;
+  language?: ReportLanguage | string;
+  title?: string;
+  rootTitle?: string;
+  generatedAt?: string;
+  date?: string;
+  marketScope?: string;
+  marketLight?: Record<string, unknown>;
+  breadth?: MarketReviewBreadth;
+  indices?: MarketReviewIndex[];
+  sectors?: SectorRankings;
+  news?: Array<Record<string, unknown>>;
+  sections?: MarketReviewPayloadSection[];
+  markets?: Record<string, MarketReviewPayload>;
+  markdownReport?: string;
+}
+
 export type AnalysisContextPackBlockStatus =
   | 'available'
   | 'missing'
@@ -190,7 +240,7 @@ export interface AnalysisContextPackOverview {
 export interface ReportDetails {
   newsContent?: string;
   rawResult?: Record<string, unknown>;
-  contextSnapshot?: Record<string, unknown>;
+  contextSnapshot?: Record<string, unknown> & { marketReviewPayload?: MarketReviewPayload };
   analysisContextPackOverview?: AnalysisContextPackOverview | null;
   financialReport?: Record<string, unknown>;
   dividendMetrics?: Record<string, unknown>;
@@ -292,6 +342,7 @@ export interface TaskStatus {
   progress?: number;
   result?: AnalysisResult;
   marketReviewReport?: string;
+  marketReviewPayload?: MarketReviewPayload;
   error?: string;
   stockName?: string;
   originalQuery?: string;
@@ -390,6 +441,7 @@ export interface NewsIntelResponse {
 /** History filter parameters */
 export interface HistoryFilters {
   stockCode?: string;
+  reportType?: ReportType;
   startDate?: string;
   endDate?: string;
 }

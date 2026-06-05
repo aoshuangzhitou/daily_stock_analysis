@@ -271,6 +271,10 @@ class TaskStatus(BaseModel):
         None,
         description="大盘复盘任务返回的报告文本（仅大盘复盘任务）",
     )
+    market_review_payload: Optional[Any] = Field(
+        None,
+        description="Structured market-review payload for API/Web consumers.",
+    )
     error: Optional[str] = Field(
         None, 
         description="错误信息（仅在 failed 时存在）"
