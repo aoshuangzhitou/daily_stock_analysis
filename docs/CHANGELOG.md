@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 综合情报搜索中的机构分析与业绩预期维度改用 180 天 provider 请求窗口，避免默认短新闻窗口漏掉财报、研报等周期性财经材料。
+- [改进] 多股通知报告将市场阶段收敛为总览下方单行 `市场状态`，不再在每只股票摘要下重复展示数据质量和限制详情。
 - [修复] Web 个股栏和历史卡片在窄布局下不再让市场阶段标签遮挡股票名称。
 - [修复] 问股自由文本追问不再将 TTM、PE、YOY 等金融缩写误识别为新股票代码。
 - [修复] GitHub Actions 每日分析工作流读取 SearXNG 自建实例地址时支持 Variables 优先、Secrets 回退，修复仅配置 Variables 时 URL 不生效的问题。
-- [新功能] Web 大盘复盘历史新增独立集合入口，支持按 `MARKET` / `market_review` 聚合查看与单条记录删除，并避免混入普通个股栏。
+- [改进] Web 首页侧栏不再单独展示大盘复盘历史集合，最新大盘复盘作为 `MARKET` 并入个股栏，按最近分析时间参与排序，并复用个股栏的选择、删除、完整报告与历史趋势查看能力。
 - [修复] Web/桌面端左侧导航选中态改用 border 实现，避免蓝色竖条指示器溢出侧栏边界；侧栏展开宽度 116px → 136px，新增 rail 紧凑模式。
 - [修复] Windows 桌面端自动更新安装目录不再预先加引号，避免带空格路径在自动安装时触发“缺少快捷方式 / 找不到 Daily Stock Analysis.exe”的系统弹窗。
 - [修复] Agent 分析路径生成 AnalysisContextPack overview 前复用已落库日线分析上下文，避免日线已抓取成功仍显示 `daily_bars_missing`。
@@ -24,8 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 美股中文场景下，市场标签与策略蓝图（`Strategy Blueprint/Strategy Framework`）已本地化为中文显示，避免 `report_language=zh` 下混入英文策略段落与市场标签；与 Issue #1555 的历史/即时结果一致。
 - [修复] Docker Web 设置页读取配置时在活跃 `.env` 文件缺项时回退展示启动注入的同名环境变量，并补清 `env_file` / `--env-file`、`ENV_FILE=/app/data/runtime.env` 与单文件 `.env` 挂载边界文档。
 - [文档] 补充说明：LLM / LiteLLM 兼容键的回退仅用于 Settings 界面展示与校验上下文拼装，不改写、不迁移、不清理用户现有的 provider/model/base URL 持久化配置；未发生 provider / model / base URL 语义迁移，仅保留同名启动注入的展示级兜底。兼容边界依据 `requirements.txt`（`litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0`、`openai>=1.0.0`）；官方语义来源：[LiteLLM OpenAI-compatible](https://docs.litellm.ai/docs/providers/openai_compatible)、[OpenAI Chat Completion API](https://platform.openai.com/docs/api-reference/chat/create)。回退/恢复路径为：重启/更新后清理同名 `env_file` / `--env-file` / `environment` 覆盖后使用持久化保存值，或通过桌面端导入/导出 `.env` 片段恢复；仅在 WebUI 未改写同名启动注入值时才会按该片段接管。验证回归点见 `tests/test_system_config_service.py::test_get_config_uses_runtime_env_as_display_fallback`、`tests/test_system_config_service.py::test_get_config_runtime_env_fallback_does_not_persist_llm_fields_on_save`、`tests/test_system_config_service.py::test_runtime_env_fallback_does_not_override_saved_provider_and_base_url_settings`、以及 `tests/test_system_config_api.py` 的 `/api/v1/system/config` 获取/保存链路回归。
+- [修复] 报告页运行诊断会区分数据源抓取成功与进入 LLM 分析输入，相关新闻区标注为报告页补充/后续检索资讯，避免与输入数据块状态互相误读。
+- [文档] #1602 修复覆盖 9 个文件：`apps/dsa-web/src/components/report/AnalysisContextSummary.tsx`、`apps/dsa-web/src/components/report/ReportDiagnostics.tsx`、`apps/dsa-web/src/components/report/ReportNews.tsx`、`apps/dsa-web/src/components/report/__tests__/AnalysisContextSummary.test.tsx`、`apps/dsa-web/src/components/report/__tests__/ReportDiagnostics.test.tsx`、`apps/dsa-web/src/components/report/__tests__/ReportNews.test.tsx`、`src/services/run_diagnostics.py`、`tests/test_run_diagnostics_p2.py`、`docs/CHANGELOG.md`，仅做输入与展示口径统一，未改写/迁移/清理 `provider`、`model`、`base_url` 等持久化运行时配置，回滚方式为常规发布回滚（revert）。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [修复] `/health` 根路径健康检查现在始终返回 JSON，避免静态 Web fallback 吞掉健康探针；`/api/health` 与 `/api/v1/health` 继续保持兼容。
+- [改进] API 错误响应构造收敛到共享 helper，保持既有错误 envelope 形状并降低 endpoint 重复代码。
+- [改进] WebUI 绑定公网地址或 CORS 全开放且未启用管理员认证时新增运行时 warning；仅增加可观测性，不阻断启动、不改写配置。
+- [改进] 数据库初始化新增 `schema_migrations` baseline 标记表与幂等记录，用于后续 schema 演进追踪；不迁移、不清理、不改写既有业务表数据。
+- [测试] Web 测试运行时声明 Node `>=20.19.0 <27` 与 npm `>=10`，并补 localStorage 测试兜底以稳定 Vitest。
 - [改进] #1386 P6 复用市场阶段与 AnalysisContextPack 公开摘要联动告警、持仓手动分析、历史、回测和通知展示，不新增数据库迁移。
 
 - [新功能] 飞书通知新增应用机器人（App Bot）模式，支持通过 FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID 配置，无需额外创建自定义机器人。

@@ -17,8 +17,8 @@ interface StockBarProps {
 }
 
 /**
- * 个股栏组件：以股票维度展示历史分析记录，每只股票只显示一条，
- * 大盘复盘置顶，其余按最新分析时间排列。支持全选、批量删除。
+ * 个股栏组件：以股票维度展示历史分析记录，每只股票只显示一条。
+ * 大盘复盘可作为 MARKET 项参与展示，并按最近分析时间排序。
  */
 export const StockBar: React.FC<StockBarProps> = ({
   items,
@@ -35,7 +35,7 @@ export const StockBar: React.FC<StockBarProps> = ({
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selectAllId = useId();
 
-  const deletableItems = items.filter((item) => !isMarketReview(item.stockCode));
+  const deletableItems = items;
   const selectedCount = [...selectedCodes].filter((code) => deletableItems.some((item) => item.stockCode === code)).length;
   const allVisibleSelected = deletableItems.length > 0 && selectedCount === deletableItems.length;
   const someVisibleSelected = selectedCount > 0 && !allVisibleSelected;
@@ -157,7 +157,7 @@ export const StockBar: React.FC<StockBarProps> = ({
 
               return (
                 <div key={`${code}-${item.id}`} className="flex items-start gap-2 group">
-                  {!isMarket && onDeleteStock && (
+                  {onDeleteStock && (
                     <div className="pt-5">
                       <input
                         type="checkbox"
@@ -172,7 +172,7 @@ export const StockBar: React.FC<StockBarProps> = ({
                     item={item}
                     isViewing={isSelected}
                     onClick={onItemClick}
-                    onDelete={isMarket ? undefined : onDeleteStock}
+                    onDelete={onDeleteStock}
                     isDeleting={isDeleting}
                     isMarketReview={isMarket}
                   />

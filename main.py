@@ -59,6 +59,7 @@ from src.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 _RUNTIME_ENV_FILE_KEYS = set()
+_PUBLIC_BIND_HOSTS = frozenset({"0.0.0.0", "::", "[::]", "*"})
 
 
 def _get_active_env_path() -> Path:
@@ -66,6 +67,26 @@ def _get_active_env_path() -> Path:
     if env_file:
         return Path(env_file)
     return Path(__file__).resolve().parent / ".env"
+
+
+def _is_public_bind_host(host: str) -> bool:
+    return (host or "").strip().lower() in _PUBLIC_BIND_HOSTS
+
+
+def _warn_if_public_webui_without_auth(host: str) -> None:
+    if not _is_public_bind_host(host):
+        return
+
+    from src.auth import is_auth_enabled
+
+    if is_auth_enabled():
+        return
+    logger.warning(
+        "WEBUI_HOST=%s binds the Web UI to a public interface while "
+        "ADMIN_AUTH_ENABLED=false. Keep this service behind a trusted network "
+        "boundary or enable admin authentication before exposing it.",
+        host,
+    )
 
 
 def _read_active_env_values() -> Optional[Dict[str, str]]:
@@ -853,6 +874,7 @@ def main() -> int:
             args.host = os.getenv('WEBUI_HOST')
         if args.port == 8000 and os.getenv('WEBUI_PORT'):
             args.port = int(os.getenv('WEBUI_PORT'))
+        _warn_if_public_webui_without_auth(args.host)
 
     bot_clients_started = False
     if start_serve:

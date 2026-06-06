@@ -5,7 +5,25 @@ import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
-import { toDateInputValue } from '../utils/format';
+import type { FxRefreshFeedback } from '../utils/portfolioFormat';
+import {
+  buildFxRefreshFeedback,
+  formatBrokerLabel,
+  formatCashDirectionLabel,
+  formatCorporateActionLabel,
+  formatMoney,
+  formatPct,
+  formatPositionMoney,
+  formatPositionPrice,
+  formatSideLabel,
+  formatSignedPct,
+  getCsvCommitVariant,
+  getCsvParseVariant,
+  getFxRefreshFeedbackVariant,
+  getPositionPriceLabel,
+  getTodayIso,
+  hasPositionPrice,
+} from '../utils/portfolioFormat';
 import type {
   PortfolioAccountItem,
   PortfolioCashDirection,
@@ -13,7 +31,6 @@ import type {
   PortfolioCorporateActionListItem,
   PortfolioCorporateActionType,
   PortfolioCostMethod,
-  PortfolioFxRefreshResponse,
   PortfolioImportBrokerItem,
   PortfolioImportCommitResponse,
   PortfolioImportParseResponse,
@@ -45,142 +62,16 @@ type PendingDelete =
   | { eventType: 'cash'; id: number; message: string }
   | { eventType: 'corporate'; id: number; message: string };
 
-type FxRefreshFeedback = {
-  tone: 'neutral' | 'success' | 'warning';
-  text: string;
-};
-
 type FxRefreshContext = {
   viewKey: string;
   requestId: number;
 };
-
-type PortfolioAlertVariant = 'info' | 'success' | 'warning' | 'danger';
 
 const PORTFOLIO_INPUT_CLASS =
   'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 const PORTFOLIO_SELECT_CLASS = `${PORTFOLIO_INPUT_CLASS} appearance-none pr-10`;
 const PORTFOLIO_FILE_PICKER_CLASS =
   'input-surface input-focus-glow flex h-11 w-full cursor-pointer items-center justify-center rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
-
-function getTodayIso(): string {
-  return toDateInputValue(new Date());
-}
-
-function formatMoney(value: number | undefined | null, currency = 'CNY'): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  return `${currency} ${Number(value).toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function formatPct(value: number | undefined | null): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  return `${value.toFixed(2)}%`;
-}
-
-function formatSignedPct(value: number | undefined | null): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  const sign = value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-function hasPositionPrice(row: PortfolioPositionItem): boolean {
-  return row.priceAvailable !== false && row.priceSource !== 'missing';
-}
-
-function formatPositionPrice(row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '--';
-  return row.lastPrice.toFixed(4);
-}
-
-function formatPositionMoney(value: number, row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '--';
-  return formatMoney(value, row.valuationCurrency);
-}
-
-function getPositionPriceLabel(row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '缺价';
-  if (row.priceSource === 'realtime_quote') {
-    return row.priceProvider ? `实时价 · ${row.priceProvider}` : '实时价';
-  }
-  if (row.priceSource === 'history_close') {
-    return row.priceStale && row.priceDate ? `收盘价 · ${row.priceDate}` : '收盘价';
-  }
-  return row.priceSource || '未知来源';
-}
-
-function formatSideLabel(value: PortfolioSide): string {
-  return value === 'buy' ? '买入' : '卖出';
-}
-
-function formatCashDirectionLabel(value: PortfolioCashDirection): string {
-  return value === 'in' ? '流入' : '流出';
-}
-
-function formatCorporateActionLabel(value: PortfolioCorporateActionType): string {
-  return value === 'cash_dividend' ? '现金分红' : '拆并股调整';
-}
-
-function formatBrokerLabel(value: string, displayName?: string): string {
-  if (displayName && displayName.trim()) return `${value}（${displayName.trim()}）`;
-  if (value === 'huatai') return 'huatai（华泰）';
-  if (value === 'citic') return 'citic（中信）';
-  if (value === 'cmb') return 'cmb（招商）';
-  return value;
-}
-
-function buildFxRefreshFeedback(data: PortfolioFxRefreshResponse): FxRefreshFeedback {
-  if (data.refreshEnabled === false) {
-    return {
-      tone: 'neutral',
-      text: '汇率在线刷新已被禁用。',
-    };
-  }
-
-  if (data.pairCount === 0) {
-    return {
-      tone: 'neutral',
-      text: '当前范围无可刷新的汇率对。',
-    };
-  }
-
-  if (data.updatedCount > 0 && data.staleCount === 0 && data.errorCount === 0) {
-    return {
-      tone: 'success',
-      text: `汇率已刷新，共更新 ${data.updatedCount} 对。`,
-    };
-  }
-
-  const summary = `更新 ${data.updatedCount} 对，仍过期 ${data.staleCount} 对，失败 ${data.errorCount} 对。`;
-  if (data.staleCount > 0) {
-    return {
-      tone: 'warning',
-      text: `已尝试刷新，但仍有部分货币对使用 stale/fallback 汇率。${summary}`,
-    };
-  }
-
-  return {
-    tone: 'warning',
-    text: `在线刷新未完全成功。${summary}`,
-  };
-}
-
-function getFxRefreshFeedbackVariant(tone: FxRefreshFeedback['tone']): PortfolioAlertVariant {
-  if (tone === 'success') return 'success';
-  if (tone === 'warning') return 'warning';
-  return 'info';
-}
-
-function getCsvParseVariant(result: PortfolioImportParseResponse): PortfolioAlertVariant {
-  return result.errorCount > 0 || result.skippedCount > 0 ? 'warning' : 'info';
-}
-
-function getCsvCommitVariant(result: PortfolioImportCommitResponse, isDryRun: boolean): PortfolioAlertVariant {
-  if (isDryRun) return 'info';
-  return result.failedCount > 0 || result.duplicateCount > 0 ? 'warning' : 'success';
-}
 
 const PortfolioPage: React.FC = () => {
   // Set page title

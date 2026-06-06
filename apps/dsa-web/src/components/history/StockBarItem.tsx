@@ -96,7 +96,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                   {operationLabel} {item.sentimentScore}
                 </Badge>
               ) : null}
-              {onDelete && !isMarketReview && (
+              {onDelete && (
                 <Button
                   variant="ghost"
                   size="xsm"
@@ -127,7 +127,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                 </span>
               </>
             )}
-            {item.analysisCount > 1 && !isMarketReview && (
+            {item.analysisCount > 1 && (
               <>
                 <span className="w-1 h-1 rounded-full bg-subtle-hover" />
                 <span className="text-[10px] text-muted-text">
