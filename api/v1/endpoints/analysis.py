@@ -17,6 +17,7 @@
 """
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -106,28 +107,19 @@ def _market_review_lock_path(config: Config) -> Path:
     return market_review_lock_path(config)
 
 
-def _compute_market_review_override_region(config: Config) -> Optional[str]:
-    if not getattr(config, "trading_day_check_enabled", True):
-        return None
-
-    try:
-        from src.core.trading_calendar import (
-            get_open_markets_today,
-            compute_effective_region,
-        )
-
-        open_markets = get_open_markets_today()
-        return compute_effective_region(
-            getattr(config, "market_review_region", "cn") or "cn",
-            open_markets,
-        )
-    except Exception as exc:
-        logger.warning("大盘复盘交易日过滤失败，按配置继续执行: %s", exc)
-        return None
-
-
 def _build_market_review_runtime(config: Config, source_message: Optional[Any] = None) -> tuple[Any, Any, Any]:
     return _runtime_build_market_review_runtime(config, source_message)
+
+
+def _with_request_report_language(config: Config, report_language: Optional[str]) -> Config:
+    """Return a request-scoped config copy when the caller overrides report language."""
+    normalized = normalize_report_language(report_language, default="")
+    if not normalized:
+        return config
+
+    scoped_config = copy.copy(config)
+    scoped_config.report_language = normalized
+    return scoped_config
 
 
 def _run_market_review_background(
@@ -147,9 +139,11 @@ def _run_market_review_background(
             "notifier": notifier,
             "analyzer": analyzer,
             "search_service": search_service,
+            "config": runtime_config,
             "send_notification": send_notification,
             "override_region": override_region,
             "return_structured": True,
+            "config": runtime_config,
         }
         if query_id:
             review_kwargs["query_id"] = query_id
@@ -324,6 +318,7 @@ def _handle_async_analysis_batch(
     notify = getattr(request, "notify", True)
     skills = getattr(request, "skills", None)
     analysis_phase = request.analysis_phase
+    report_language = normalize_report_language(getattr(request, "report_language", None), default="")
 
     submit_kwargs = dict(
         stock_codes=stock_codes,
@@ -335,6 +330,8 @@ def _handle_async_analysis_batch(
         force_refresh=request.force_refresh,
         notify=notify,
     )
+    if report_language:
+        submit_kwargs["report_language"] = report_language
     if skills is not None:
         submit_kwargs["skills"] = skills
 
@@ -424,6 +421,7 @@ def _handle_sync_analysis(
             send_notification=getattr(request, "notify", True),
             skills=getattr(request, "skills", None),
             analysis_phase=request.analysis_phase,
+            report_language=getattr(request, "report_language", None),
         )
 
         if result is None:
@@ -476,7 +474,7 @@ def _handle_sync_analysis(
         500: {"description": "提交失败", "model": ErrorResponse},
     },
     summary="触发大盘复盘",
-    description="提交一个后台大盘复盘任务，复用 CLI 的大盘复盘链路并保存报告。接口内部仅提供进程内/单机防重，如多实例（多 Worker/多容器）部署，需结合外部幂等机制避免重复触发。",
+    description="提交一个后台大盘复盘任务，复用 CLI 的大盘复盘运行时装配并保存报告。该人工触发入口不按交易日检查跳过；接口内部仅提供进程内/单机防重，如多实例（多 Worker/多容器）部署，需结合外部幂等机制避免重复触发。",
 )
 def trigger_market_review(
     request: Optional[MarketReviewRequest] = Body(None),
@@ -485,16 +483,12 @@ def trigger_market_review(
     """Trigger market review from Web/API without blocking the request."""
     request = request or MarketReviewRequest()
 
-    override_region = _compute_market_review_override_region(config)
-    if override_region == "":
-        return MarketReviewAccepted(
-            status="accepted",
-            message="今日大盘复盘相关市场均为非交易日，已跳过大盘复盘",
-            send_notification=request.send_notification,
-            trace_id=None,
-        )
+    runtime_config = _with_request_report_language(
+        config,
+        getattr(request, "report_language", None),
+    )
 
-    lock_token = _try_acquire_market_review_lock(config)
+    lock_token = _try_acquire_market_review_lock(runtime_config)
     if lock_token is None:
         raise api_error(409, "duplicate_market_review", "大盘复盘正在执行中，请稍后再试")
 
@@ -503,9 +497,9 @@ def trigger_market_review(
         task = get_task_queue().submit_background_task(
             lambda: _run_market_review_background(
                 request.send_notification,
-                override_region=override_region,
+                override_region=None,
                 lock_token=lock_token,
-                config=config,
+                config=runtime_config,
                 query_id=task_id,
             ),
             stock_code="market_review",

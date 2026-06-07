@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [chore] 移除随 issue / PR 验收流程误入库的截图资产，并明确一次性截图证据应保留在 PR 描述、评论、附件或 artifact 中，不作为仓库文件合入。
 - [修复] 综合情报搜索中的机构分析与业绩预期维度改用 180 天 provider 请求窗口，避免默认短新闻窗口漏掉财报、研报等周期性财经材料。
 - [改进] 多股通知报告将市场阶段收敛为总览下方单行 `市场状态`，不再在每只股票摘要下重复展示数据质量和限制详情。
 - [修复] Web 个股栏和历史卡片在窄布局下不再让市场阶段标签遮挡股票名称。
@@ -20,10 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Agent 分析路径生成 AnalysisContextPack overview 前复用已落库日线分析上下文，避免日线已抓取成功仍显示 `daily_bars_missing`。
 - [新功能] Web 大盘复盘报告新增专用展示视图，历史入口和首页即时结果统一使用 Markdown/GFM 渲染并隐藏个股专属模块。
 - [新功能] 大盘复盘新增结构化 `market_review_payload`，Web、历史详情和推送统一基于结构化数据渲染，并保留 Markdown 兼容展示。
+- [文档] Issue #777 PR 落地说明已与实现对齐：语言切换采用仓内 `UiLanguageContext` + `uiText` 实现（未引入 `react-i18next` / `i18next`），持久化 key 为 `dsa.uiLanguage`；UI 语言与 `report_language` 解耦，仅影响文案展示，不改写报告语言链路。
+- [文档] 本次 UI 改动新增可视化验收指引，要求 PR 附上 `smoke-login-page-zh`、`smoke-home-page-zh`、`smoke-home-page-en`、`smoke-settings-page-zh`、`smoke-settings-page-en`、`smoke-mobile-shell-nav` 截图；若环境不可拍摄，请在 PR 说明补充替代可视证据路径和原因。
+- [文档] Issue #777 相关回归范围说明：`LITELLM_MODEL`、`OPENAI_BASE_URL`、`OPENAI_VISION_MODEL` 测试覆盖用于防止配置保存误清空；未发生 provider/model/base_url 运行时默认值、迁移或清理语义变更。
+- [测试] 本轮 Web 方向验证执行：`cd apps/dsa-web && npm run lint`、`cd apps/dsa-web && npm run build`、`cd apps/dsa-web && npm run test -- src/App.test.tsx src/contexts/__tests__/UiLanguageContext.test.tsx src/hooks/__tests__/useSystemConfig.test.tsx`、`cd apps/dsa-web && npm run test:smoke -- e2e/smoke.spec.ts e2e/report-markdown.spec.ts`（命令已执行，含 `web-gate: success`；`e2e/smoke.spec.ts` 与 `e2e/report-markdown.spec.ts` 共 12 条用例，全部 skip，原因是未设置 `DSA_WEB_SMOKE_PASSWORD`；其中 `language switch updates UI copy and persists after page refresh` 用例用于语言切换验收）。
 - [文档] 本次迭代仅重构大盘复盘展示链路（统一 Markdown/GFM 渲染与结构化 payload 渲染），不涉及 `LITELLM_*`、`LLM_*`、`provider/model/base_url` 等运行时配置语义；如需回退采用常规发布回滚。
 - [修复] 修正大盘复盘结构化 `breadth` 的可用性判断：当市场不支持/抓取失败（如美股、港股或 A 股 breadth 不可用）时不下发 `breadth`，前端展示“暂无数据”，避免误导性 0 值。
 - [修复] 明确大盘复盘语言行为调整为遵循全局 `report_language`，并在回退场景保持原语种提示（如美股/港股默认会按配置语言展示）；兼容性变化说明见该条款，无需额外改动 provider/model/base_url。
 - [修复] 美股中文场景下，市场标签与策略蓝图（`Strategy Blueprint/Strategy Framework`）已本地化为中文显示，避免 `report_language=zh` 下混入英文策略段落与市场标签；与 Issue #1555 的历史/即时结果一致。
+- [改进] Web/API 大盘复盘人工触发入口不再因交易日检查或相关市场休市而短路跳过；定时任务、GitHub Actions 手动运行和 CLI 默认入口仍保持原交易日 gate。
 - [修复] Docker Web 设置页读取配置时在活跃 `.env` 文件缺项时回退展示启动注入的同名环境变量，并补清 `env_file` / `--env-file`、`ENV_FILE=/app/data/runtime.env` 与单文件 `.env` 挂载边界文档。
 - [文档] 补充说明：LLM / LiteLLM 兼容键的回退仅用于 Settings 界面展示与校验上下文拼装，不改写、不迁移、不清理用户现有的 provider/model/base URL 持久化配置；未发生 provider / model / base URL 语义迁移，仅保留同名启动注入的展示级兜底。兼容边界依据 `requirements.txt`（`litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0`、`openai>=1.0.0`）；官方语义来源：[LiteLLM OpenAI-compatible](https://docs.litellm.ai/docs/providers/openai_compatible)、[OpenAI Chat Completion API](https://platform.openai.com/docs/api-reference/chat/create)。回退/恢复路径为：重启/更新后清理同名 `env_file` / `--env-file` / `environment` 覆盖后使用持久化保存值，或通过桌面端导入/导出 `.env` 片段恢复；仅在 WebUI 未改写同名启动注入值时才会按该片段接管。验证回归点见 `tests/test_system_config_service.py::test_get_config_uses_runtime_env_as_display_fallback`、`tests/test_system_config_service.py::test_get_config_runtime_env_fallback_does_not_persist_llm_fields_on_save`、`tests/test_system_config_service.py::test_runtime_env_fallback_does_not_override_saved_provider_and_base_url_settings`、以及 `tests/test_system_config_api.py` 的 `/api/v1/system/config` 获取/保存链路回归。
 - [修复] 报告页运行诊断会区分数据源抓取成功与进入 LLM 分析输入，相关新闻区标注为报告页补充/后续检索资讯，避免与输入数据块状态互相误读。
@@ -36,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 数据库初始化新增 `schema_migrations` baseline 标记表与幂等记录，用于后续 schema 演进追踪；不迁移、不清理、不改写既有业务表数据。
 - [测试] Web 测试运行时声明 Node `>=20.19.0 <27` 与 npm `>=10`，并补 localStorage 测试兜底以稳定 Vitest。
 - [改进] #1386 P6 复用市场阶段与 AnalysisContextPack 公开摘要联动告警、持仓手动分析、历史、回测和通知展示，不新增数据库迁移。
+- [新功能] WebUI 新增独立界面语言状态与中英文切换入口，覆盖主导航、首页、登录、设置页和通用控件文案；不复用或改变报告语言配置语义。
 
 - [新功能] 飞书通知新增应用机器人（App Bot）模式，支持通过 FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID 配置，无需额外创建自定义机器人。
 - [文档] 明确 AnalysisContextPack P6 文档、迁移与回滚边界，并同步既有 `SAVE_CONTEXT_SNAPSHOT` 到 `.env.example`、配置注册表、Web 设置帮助和完整指南。
