@@ -5,6 +5,7 @@ import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { RunFlowEdge, RunFlowLane, RunFlowNode, RunFlowStatus } from '../../types/runFlow';
 import {
   compactText,
+  formatDateTime,
   formatDuration,
   getNodeDisplayOrder,
   getRunFlowEdgeKindLabel,
@@ -29,11 +30,19 @@ type PositionedNode = RunFlowNode & {
   laneIndex: number;
 };
 
+type EdgePort = 'top' | 'right' | 'bottom' | 'left';
+
+interface PortPoint {
+  x: number;
+  y: number;
+  side: EdgePort;
+}
+
 const LANE_WIDTH = 292;
 const NODE_WIDTH = 244;
-const NODE_HEIGHT = 108;
+const NODE_HEIGHT = 124;
 const HEADER_HEIGHT = 42;
-const ROW_HEIGHT = 126;
+const ROW_HEIGHT = 144;
 const LEFT_PADDING = 20;
 const TOP_PADDING = 18;
 const BOTTOM_PADDING = 30;
@@ -73,6 +82,86 @@ const getCenteredTrackOffset = (total: number, index: number, step = 12): number
   (index - (total - 1) / 2) * step
 );
 
+const portPoint = (node: PositionedNode, side: EdgePort, offset = 0): PortPoint => {
+  if (side === 'top') {
+    return { x: node.x + node.width / 2 + offset, y: node.y, side };
+  }
+  if (side === 'bottom') {
+    return { x: node.x + node.width / 2 + offset, y: node.y + node.height, side };
+  }
+  if (side === 'left') {
+    return { x: node.x, y: node.y + node.height / 2 + offset, side };
+  }
+  return { x: node.x + node.width, y: node.y + node.height / 2 + offset, side };
+};
+
+const chooseEdgePorts = (
+  edge: RunFlowEdge,
+  from: PositionedNode,
+  to: PositionedNode,
+): { startSide: EdgePort; endSide: EdgePort; vertical: boolean } => {
+  const sameLane = from.lane === to.lane;
+  const verticalDistance = Math.abs(to.y - from.y);
+  const isVerticalRelation = verticalDistance >= ROW_HEIGHT / 2;
+
+  if (sameLane && isVerticalRelation) {
+    return to.y >= from.y
+      ? { startSide: 'bottom', endSide: 'top', vertical: true }
+      : { startSide: 'top', endSide: 'bottom', vertical: true };
+  }
+
+  if ((edge.kind === 'fallback' || edge.kind === 'retry') && isVerticalRelation && Math.abs(to.x - from.x) < LANE_WIDTH * 1.25) {
+    return to.y >= from.y
+      ? { startSide: 'bottom', endSide: 'top', vertical: true }
+      : { startSide: 'top', endSide: 'bottom', vertical: true };
+  }
+
+  return to.x >= from.x
+    ? { startSide: 'right', endSide: 'left', vertical: false }
+    : { startSide: 'left', endSide: 'right', vertical: false };
+};
+
+const orthogonalPath = (start: PortPoint, end: PortPoint): string => {
+  if ((start.side === 'top' || start.side === 'bottom') && (end.side === 'top' || end.side === 'bottom')) {
+    if (Math.abs(start.x - end.x) < 1) {
+      return `M ${start.x} ${start.y} V ${end.y}`;
+    }
+    const midY = (start.y + end.y) / 2;
+    return `M ${start.x} ${start.y} V ${midY} H ${end.x} V ${end.y}`;
+  }
+
+  const midX = (start.x + end.x) / 2;
+  return `M ${start.x} ${start.y} H ${midX} V ${end.y} H ${end.x}`;
+};
+
+const nodeTimeOrder = (node: RunFlowNode): number | null => {
+  const rawTime = node.startedAt || node.endedAt;
+  if (!rawTime) {
+    return null;
+  }
+  const parsed = Date.parse(rawTime);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const compareLaneNodes = (
+  laneId: string,
+  left: RunFlowNode,
+  right: RunFlowNode,
+  originalIndex: Map<string, number>,
+): number => {
+  const leftOriginal = originalIndex.get(left.id) ?? 0;
+  const rightOriginal = originalIndex.get(right.id) ?? 0;
+  if (laneId === 'data_source') {
+    const leftTime = nodeTimeOrder(left);
+    const rightTime = nodeTimeOrder(right);
+    if (leftTime !== null || rightTime !== null) {
+      return (leftTime ?? Number.MAX_SAFE_INTEGER) - (rightTime ?? Number.MAX_SAFE_INTEGER)
+        || getNodeDisplayOrder(left, leftOriginal) - getNodeDisplayOrder(right, rightOriginal);
+    }
+  }
+  return getNodeDisplayOrder(left, leftOriginal) - getNodeDisplayOrder(right, rightOriginal);
+};
+
 export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
   lanes,
   nodes,
@@ -81,7 +170,7 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
   onSelectNode,
 }) => {
   const arrowId = useId().replace(/:/g, '-');
-  const { t } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const laneList = useMemo(() => {
     const sortedLanes = [...lanes].sort((left, right) => left.order - right.order);
     const knownLaneIds = new Set(sortedLanes.map((lane) => lane.id));
@@ -122,8 +211,7 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
     const laneOrderByNode = new Map<string, number>();
     laneList.forEach((lane) => {
       const laneNodes = [...(grouped.get(lane.id) || [])].sort((left, right) => (
-        getNodeDisplayOrder(left, originalIndex.get(left.id) ?? 0)
-        - getNodeDisplayOrder(right, originalIndex.get(right.id) ?? 0)
+        compareLaneNodes(lane.id, left, right, originalIndex)
       ));
       laneNodes.forEach((node, index) => {
         laneOrderByNode.set(node.id, index);
@@ -169,8 +257,7 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
     laneList.forEach((lane, lanePosition) => {
       const laneNodes = [...(grouped.get(lane.id) || [])].sort((left, right) => (
         resolvePreferredRow(left.id) - resolvePreferredRow(right.id)
-        || getNodeDisplayOrder(left, originalIndex.get(left.id) ?? 0)
-        - getNodeDisplayOrder(right, originalIndex.get(right.id) ?? 0)
+        || compareLaneNodes(lane.id, left, right, originalIndex)
       ));
       const occupiedRows = new Set<number>();
       laneNodes.forEach((node) => {
@@ -239,42 +326,24 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
       if (!from || !to) {
         return null;
       }
-      const sameLane = from.lane === to.lane;
-      const sameLaneVertical = sameLane && Math.abs(to.y - from.y) >= ROW_HEIGHT / 2;
-      if (sameLaneVertical) {
-        const downward = to.y >= from.y;
-        const trackOffset = getCenteredTrackOffset(edges.length, edgeIndex, 2);
-        const startX = from.x + from.width / 2 + trackOffset;
-        const endX = to.x + to.width / 2 + trackOffset;
-        const startY = downward ? from.y + from.height : from.y;
-        const endY = downward ? to.y : to.y + to.height;
-        const routeY = (startY + endY) / 2;
-        const path = `M ${startX} ${startY} C ${startX} ${routeY}, ${endX} ${routeY}, ${endX} ${endY}`;
-        return {
-          edge,
-          path,
-          labelX: (startX + endX) / 2,
-          labelY: routeY - 6,
-        };
-      }
-
-      const forward = to.x >= from.x;
-      const startX = forward ? from.x + from.width : from.x;
-      const endX = forward ? to.x : to.x + to.width;
-      const startY = layout.outgoingAnchors.get(edge.id) ?? from.y + from.height / 2;
-      const endY = layout.incomingAnchors.get(edge.id) ?? to.y + to.height / 2;
-      const direction = forward ? 1 : -1;
       const trackOffset = getCenteredTrackOffset(edges.length, edgeIndex, 2);
-      const laneGap = Math.abs(endX - startX);
-      const routeX = sameLane
-        ? startX + direction * (34 + Math.abs(trackOffset))
-        : startX + direction * Math.max(44, laneGap / 2) + trackOffset;
-      const path = `M ${startX} ${startY} C ${routeX} ${startY}, ${routeX} ${endY}, ${endX} ${endY}`;
+      const ports = chooseEdgePorts(edge, from, to);
+      const startOffset = ports.startSide === 'left' || ports.startSide === 'right'
+        ? (layout.outgoingAnchors.get(edge.id) ?? from.y + from.height / 2) - (from.y + from.height / 2)
+        : trackOffset;
+      const endOffset = ports.endSide === 'left' || ports.endSide === 'right'
+        ? (layout.incomingAnchors.get(edge.id) ?? to.y + to.height / 2) - (to.y + to.height / 2)
+        : trackOffset;
+      const start = portPoint(from, ports.startSide, startOffset);
+      const end = portPoint(to, ports.endSide, endOffset);
+      const path = orthogonalPath(start, end);
+      const relatedToSelected = Boolean(selectedNodeId && (edge.from === selectedNodeId || edge.to === selectedNodeId));
       return {
         edge,
         path,
-        labelX: routeX,
-        labelY: (startY + endY) / 2 - 6,
+        labelX: (start.x + end.x) / 2,
+        labelY: (start.y + end.y) / 2 - 6,
+        relatedToSelected,
       };
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -320,7 +389,7 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
                 <path d="M 0 0 L 8 4 L 0 8 z" fill="currentColor" />
               </marker>
             </defs>
-            {edgePaths.map(({ edge, path, labelX, labelY }) => (
+            {edgePaths.map(({ edge, path, labelX, labelY, relatedToSelected }) => (
               <g key={edge.id} style={{ color: getEdgeStroke(edge.status) }}>
                 <path
                   d={path}
@@ -329,9 +398,9 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
                   strokeWidth={edge.kind === 'fallback' || edge.kind === 'retry' ? 2.5 : 1.75}
                   strokeDasharray={edge.kind === 'retry' ? '7 5' : edge.kind === 'fallback' ? '4 4' : undefined}
                   markerEnd={`url(#${arrowId}-arrow)`}
-                  opacity={0.78}
+                  opacity={selectedNodeId ? (relatedToSelected ? 0.9 : 0.22) : 0.68}
                 />
-                {edge.label ? (
+                {edge.label && (!selectedNodeId || relatedToSelected || edge.kind === 'fallback' || edge.kind === 'retry') ? (
                   <text
                     x={labelX}
                     y={labelY}
@@ -405,6 +474,11 @@ export const RunFlowGraph: React.FC<RunFlowGraphProps> = ({
                       <span className="text-[11px] text-muted-text">{formatDuration(node.durationMs, t)}</span>
                     ) : null}
                   </span>
+                  {node.startedAt ? (
+                    <span className="mt-1 block w-full truncate text-[11px] text-muted-text">
+                      {t('runFlow.graph.startedAt')}: {formatDateTime(node.startedAt, language, t)}
+                    </span>
+                  ) : null}
                 </button>
               </Tooltip>
             );

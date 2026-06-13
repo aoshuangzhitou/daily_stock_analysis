@@ -22,6 +22,11 @@ from src.market_analyzer import MarketAnalyzer
 from src.report_language import normalize_report_language
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
+from src.services.run_diagnostics import (
+    current_diagnostic_snapshot,
+    record_history_run,
+    record_notification_run,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,46 @@ class MarketReviewRunResult:
 
     report: str
     market_review_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+def _refresh_market_review_history_diagnostics(*, query_id: str) -> None:
+    """Refresh persisted market-review diagnostics after late flow events are recorded."""
+    diagnostic_snapshot = current_diagnostic_snapshot()
+    if diagnostic_snapshot is None:
+        return
+
+    try:
+        from src.storage import DatabaseManager
+
+        db = DatabaseManager.get_instance()
+        updater = getattr(db, "update_analysis_history_diagnostics", None)
+        if callable(updater):
+            updater(
+                query_id=query_id,
+                code=MARKET_REVIEW_HISTORY_CODE,
+                diagnostics=diagnostic_snapshot,
+            )
+    except Exception as exc:
+        logger.warning("回写大盘复盘运行诊断失败（fail-open）: %s", exc)
+
+
+def _record_market_review_notification_run(
+    *,
+    query_id: str,
+    channel: str,
+    status: str,
+    success: bool,
+    attempts: int = 1,
+    error_message: Optional[Any] = None,
+) -> None:
+    record_notification_run(
+        channel=channel,
+        status=status,
+        success=success,
+        attempts=attempts,
+        error_message=error_message,
+    )
+    _refresh_market_review_history_diagnostics(query_id=query_id)
 
 
 def _get_market_review_text(language: str) -> dict[str, str]:
@@ -94,6 +139,8 @@ def run_market_review(
     override_region: Optional[str] = None,
     query_id: Optional[str] = None,
     return_structured: bool = False,
+    save_report_file: bool = True,
+    persist_history: bool = True,
     trigger_source: str = "cli",
 ) -> Optional[str] | Optional[MarketReviewRunResult]:
     """
@@ -108,12 +155,15 @@ def run_market_review(
         merge_notification: 是否合并推送（跳过本次推送，由 main 层合并个股+大盘后统一发送，Issue #190）
         override_region: 覆盖 config 的 market_review_region（Issue #373 交易日过滤后有效子集）
         query_id: 历史记录关联 ID；API 后台任务会传入 task_id，CLI/Bot 为空时自动生成
+        save_report_file: 是否保存 Markdown 文件；上下文生成路径可关闭以避免多区域临时复盘互相覆盖
+        persist_history: 是否写入 analysis_history；预热路径可关闭以避免覆盖用户可见的同日大盘复盘记录
         trigger_source: 触发来源，用于日志排障（cli/schedule/api/bot/service 等）
 
     Returns:
         复盘报告文本
     """
     runtime_config = config or get_config()
+    history_query_id = query_id or f"market_review_{uuid.uuid4().hex}"
     review_text = _get_market_review_text(getattr(runtime_config, "report_language", "zh"))
     raw_region = (
         override_region
@@ -125,7 +175,7 @@ def run_market_review(
     logger.info(
         "[MarketReview] component=market_review action=start trigger_source=%s query_id=%s region=%s",
         trigger_source,
-        query_id or "-",
+        history_query_id,
         persist_region,
     )
 
@@ -142,7 +192,7 @@ def run_market_review(
                     "[MarketReview] component=market_review action=build_report "
                     "trigger_source=%s query_id=%s region=%s label=%s",
                     trigger_source,
-                    query_id or "-",
+                    history_query_id,
                     mkt,
                     label,
                 )
@@ -176,7 +226,7 @@ def run_market_review(
                 "[MarketReview] component=market_review action=build_report "
                 "trigger_source=%s query_id=%s region=%s label=%s",
                 trigger_source,
-                query_id or "-",
+                history_query_id,
                 run_region,
                 label,
             )
@@ -209,31 +259,33 @@ def run_market_review(
                 market_review_payload,
                 wrapper_title=review_text["root_title"],
             )
-            # 保存报告到文件
-            date_str = datetime.now().strftime('%Y%m%d')
-            report_filename = f"market_review_{date_str}.md"
-            filepath = notifier.save_report_to_file(
-                markdown_report,
-                report_filename
-            )
-            logger.info(
-                "[MarketReview] component=market_review action=save_report "
-                "trigger_source=%s query_id=%s region=%s path=%s",
-                trigger_source,
-                query_id or "-",
-                persist_region,
-                filepath,
-            )
+            if save_report_file:
+                # 保存报告到文件
+                date_str = datetime.now().strftime('%Y%m%d')
+                report_filename = f"market_review_{date_str}.md"
+                filepath = notifier.save_report_to_file(
+                    markdown_report,
+                    report_filename
+                )
+                logger.info(
+                    "[MarketReview] component=market_review action=save_report "
+                    "trigger_source=%s query_id=%s region=%s path=%s",
+                    trigger_source,
+                    history_query_id,
+                    persist_region,
+                    filepath,
+                )
 
-            _persist_market_review_history(
-                review_report=review_report,
-                markdown_report=markdown_report,
-                region=persist_region,
-                config=runtime_config,
-                query_id=query_id,
-                market_light_snapshots=market_light_snapshots,
-                market_review_payload=market_review_payload,
-            )
+            if persist_history:
+                _persist_market_review_history(
+                    review_report=review_report,
+                    markdown_report=markdown_report,
+                    region=persist_region,
+                    config=runtime_config,
+                    query_id=history_query_id,
+                    market_light_snapshots=market_light_snapshots,
+                    market_review_payload=market_review_payload,
+                )
             
             # 推送通知（合并模式下跳过，由 main 层统一发送）
             if merge_notification and send_notification:
@@ -241,8 +293,15 @@ def run_market_review(
                     "[MarketReview] component=market_review action=skip_standalone_notification "
                     "trigger_source=%s query_id=%s region=%s",
                     trigger_source,
-                    query_id or "-",
+                    history_query_id,
                     persist_region,
+                )
+                _record_market_review_notification_run(
+                    query_id=history_query_id,
+                    channel="report",
+                    status="skipped",
+                    success=False,
+                    attempts=0,
                 )
             elif send_notification and notifier.is_available():
                 # 添加标题
@@ -252,12 +311,18 @@ def run_market_review(
                 )
 
                 success = notifier.send(report_content, email_send_to_all=True, route_type="report")
+                _record_market_review_notification_run(
+                    query_id=history_query_id,
+                    channel="report",
+                    status="success" if success else "failed",
+                    success=success,
+                )
                 if success:
                     logger.info(
                         "[MarketReview] component=market_review action=send_notification "
                         "status=success trigger_source=%s query_id=%s region=%s",
                         trigger_source,
-                        query_id or "-",
+                        history_query_id,
                         persist_region,
                     )
                 else:
@@ -265,7 +330,7 @@ def run_market_review(
                         "[MarketReview] component=market_review action=send_notification "
                         "status=failed trigger_source=%s query_id=%s region=%s",
                         trigger_source,
-                        query_id or "-",
+                        history_query_id,
                         persist_region,
                     )
             elif not send_notification:
@@ -273,8 +338,30 @@ def run_market_review(
                     "[MarketReview] component=market_review action=skip_notification "
                     "reason=no_notify trigger_source=%s query_id=%s region=%s",
                     trigger_source,
-                    query_id or "-",
+                    history_query_id,
                     persist_region,
+                )
+                _record_market_review_notification_run(
+                    query_id=history_query_id,
+                    channel="report",
+                    status="skipped",
+                    success=False,
+                    attempts=0,
+                )
+            else:
+                logger.info(
+                    "[MarketReview] component=market_review action=skip_notification "
+                    "reason=not_configured trigger_source=%s query_id=%s region=%s",
+                    trigger_source,
+                    history_query_id,
+                    persist_region,
+                )
+                _record_market_review_notification_run(
+                    query_id=history_query_id,
+                    channel="report",
+                    status="not_configured",
+                    success=False,
+                    attempts=0,
                 )
             
             if return_structured:
@@ -289,7 +376,7 @@ def run_market_review(
             "[MarketReview] component=market_review action=failed "
             "trigger_source=%s query_id=%s region=%s",
             trigger_source,
-            query_id or "-",
+            history_query_id,
             persist_region,
         )
     
@@ -456,8 +543,12 @@ def _persist_market_review_history(
             context_snapshot["market_light_snapshots"] = market_light_snapshots
         if market_review_payload:
             context_snapshot["market_review_payload"] = market_review_payload
+        diagnostic_snapshot = current_diagnostic_snapshot()
+        if diagnostic_snapshot is not None:
+            context_snapshot["diagnostics"] = diagnostic_snapshot
 
-        saved = DatabaseManager.get_instance().save_analysis_history(
+        db = DatabaseManager.get_instance()
+        saved = db.save_analysis_history(
             result=result,
             query_id=history_query_id,
             report_type=MARKET_REVIEW_REPORT_TYPE,
@@ -465,12 +556,28 @@ def _persist_market_review_history(
             context_snapshot=context_snapshot,
             save_snapshot=True,
         )
+        saved_history_id = (
+            saved
+            if isinstance(saved, int) and not isinstance(saved, bool) and saved > 0
+            else None
+        )
+        record_history_run(
+            report_saved=bool(saved),
+            metadata_saved=bool(saved),
+            analysis_history_id=saved_history_id,
+        )
+        _refresh_market_review_history_diagnostics(query_id=history_query_id)
         if saved:
             logger.info("大盘复盘历史记录已保存: query_id=%s", history_query_id)
         else:
             logger.warning("大盘复盘历史记录保存失败: query_id=%s", history_query_id)
         return saved
     except Exception as exc:
+        record_history_run(
+            report_saved=False,
+            metadata_saved=False,
+            error_message=exc,
+        )
         logger.warning("大盘复盘历史记录保存异常，报告文件与推送流程继续: %s", exc, exc_info=True)
         return 0
 
