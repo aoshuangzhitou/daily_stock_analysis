@@ -145,18 +145,55 @@ describe('alphasiftApi', () => {
           },
         ],
         hotspot_count: 1,
+        details: {
+          AI绠楀姏: {
+            enabled: true,
+            provider: 'akshare',
+            topic: 'AI绠楀姏',
+            route: [{ title: '盘中发酵', description: '事件摘要' }],
+            stocks: [],
+            stock_count: 0,
+          },
+        },
       },
     });
 
     const result = await alphasiftApi.getHotspots({ provider: 'akshare', top: 12, refresh: true });
 
     expect(get).toHaveBeenCalledWith('/api/v1/alphasift/hotspots', {
-      params: { provider: 'akshare', top: 12, refresh: true },
+      params: { provider: 'akshare', top: 12, refresh: true, include_details: true },
       timeout: 300000,
     });
     expect(result.providerUsed).toBe('akshare');
     expect(result.hotspots[0].heatScore).toBe(88);
     expect(result.hotspots[0].sampleStockCount).toBe(8);
+    expect(Object.values(result.details || {})[0]?.stockCount).toBe(0);
+  });
+
+  it('keeps prefetched hotspot details addressable by the original topic', async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        enabled: true,
+        provider: 'akshare',
+        provider_used: 'akshare',
+        hotspots: [{ topic: 'Moly Theme', heat_score: 96 }],
+        hotspot_count: 1,
+        details: {
+          moly_theme: {
+            enabled: true,
+            provider: 'akshare',
+            topic: 'Moly Theme',
+            route: [{ title: 'catalyst', description: 'summary' }],
+            stocks: [],
+            stock_count: 0,
+          },
+        },
+      },
+    });
+
+    const result = await alphasiftApi.getHotspots({ provider: 'akshare', top: 12, refresh: false });
+
+    expect(result.details?.['Moly Theme']?.stockCount).toBe(0);
   });
 
   it('loads hotspot detail for a concrete topic', async () => {
@@ -175,7 +212,7 @@ describe('alphasiftApi', () => {
     const result = await alphasiftApi.getHotspotDetail({ topic: '玻璃基板', provider: 'akshare' });
 
     expect(get).toHaveBeenCalledWith('/api/v1/alphasift/hotspots/%E7%8E%BB%E7%92%83%E5%9F%BA%E6%9D%BF', {
-      params: { provider: 'akshare' },
+      params: { provider: 'akshare', refresh: false },
       timeout: 300000,
     });
     expect(result.topic).toBe('玻璃基板');

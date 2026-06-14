@@ -8,9 +8,10 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, List
 from unittest.mock import ANY, MagicMock, patch
 import threading
 
@@ -113,7 +114,11 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         return alphasift_endpoint.alphasift_hotspots(config=config, **kwargs)
 
     def _hotspot_detail(self, config: Config, **kwargs):
-        return alphasift_endpoint.alphasift_hotspot_detail(config=config, **kwargs)
+        if os.environ.get("ALPHASIFT_DATA_DIR"):
+            return alphasift_endpoint.alphasift_hotspot_detail(config=config, **kwargs)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(Path(tmpdir) / "alphasift")}, clear=False):
+                return alphasift_endpoint.alphasift_hotspot_detail(config=config, **kwargs)
 
     def test_default_install_spec_is_commit_pinned(self) -> None:
         self.assertRegex(
@@ -282,17 +287,21 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                 "topic": "AI算力",
                 "name": "AI算力",
                 "heat_score": 88.0,
+                "change_pct": 6.2,
                 "stage": "加速主升",
                 "leaders": ["中际旭创"],
             }
         ])
         discover = MagicMock(return_value=rows)
 
-        with (
-            patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
-            patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
-        ):
-            payload = self._hotspots(config=config, provider="akshare", top=6, refresh=True)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "hotspots.json"
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                payload = self._hotspots(config=config, provider="akshare", top=1, refresh=True)
 
         self.assertEqual(payload["enabled"], True)
         self.assertEqual(payload["provider"], "akshare")
@@ -304,7 +313,93 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         provider = discover.call_args.kwargs["provider"]
         self.assertTrue(hasattr(provider, "stock_board_concept_name_em"))
         self.assertTrue(hasattr(provider, "stock_board_industry_name_em"))
-        self.assertEqual(discover.call_args.kwargs["top"], 6)
+        self.assertEqual(discover.call_args.kwargs["top"], 1)
+
+    def test_hotspots_refresh_uses_dsa_direct_rows_when_alphasift_rows_are_thin(self) -> None:
+        config = self._config(enabled=True)
+
+        class ThinRows(list):
+            provider_used = "akshare"
+            fallback_used = False
+            source_errors = []
+            stale = False
+            stale_age_hours = None
+
+        class FakeProvider(alphasift_service.DsaEastMoneyHotspotProvider):
+            def hotspot_rows(self, *, top: int = 12) -> List[Dict[str, Any]]:
+                return [
+                    {"topic": "钼", "name": "钼", "heat_score": 96.0, "change_pct": 10.0, "leaders": ["盛龙股份"]},
+                    {"topic": "铅锌", "name": "铅锌", "heat_score": 92.0, "change_pct": 9.14, "leaders": ["豫光金铅"]},
+                    {"topic": "铜", "name": "铜", "heat_score": 89.0, "change_pct": 7.03, "leaders": ["江西铜业"]},
+                ][:top]
+
+        discover = MagicMock(return_value=ThinRows([
+            {"topic": "AI算力", "name": "AI算力", "heat_score": 88.0},
+        ]))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "hotspots.json"
+            provider = FakeProvider()
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                payload = self._hotspots(config=config, provider="akshare", top=6, refresh=True)
+
+        self.assertEqual(payload["provider_used"], "dsa_eastmoney_board_change")
+        self.assertEqual(payload["hotspot_count"], 3)
+        self.assertEqual([item["topic"] for item in payload["hotspots"][:3]], ["钼", "铅锌", "铜"])
+        self.assertTrue(payload["fallback_used"])
+
+    def test_hotspots_enriches_missing_metrics_from_dsa_provider(self) -> None:
+        config = self._config(enabled=True)
+
+        class HotspotRows(list):
+            provider_used = "akshare"
+            fallback_used = False
+            source_errors = []
+            stale = False
+            stale_age_hours = None
+
+        class FakeProvider(alphasift_service.DsaEastMoneyHotspotProvider):
+            def hotspot_rows(self, *, top: int = 12) -> List[Dict[str, Any]]:
+                return [{
+                    "topic": "铜",
+                    "name": "工业金属 · 铜",
+                    "heat_score": 92.0,
+                    "change_pct": 7.03,
+                    "trend_score": 99.0,
+                    "persistence_score": 64.3,
+                    "sample_stock_count": 11,
+                    "leaders": ["嘉元科技", "方邦股份"],
+                    "theme_group": "工业金属",
+                }]
+
+        discover = MagicMock(return_value=HotspotRows([{
+            "topic": "铜",
+            "name": "铜",
+            "heat_score": 92.0,
+            "change_pct": 7.03,
+        }]))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "hotspots.json"
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", FakeProvider())),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                payload = self._hotspots(config=config, provider="akshare", top=1, refresh=True)
+
+        hotspot = payload["hotspots"][0]
+        self.assertEqual(hotspot["name"], "工业金属 · 铜")
+        self.assertEqual(hotspot["trend_score"], 99.0)
+        self.assertEqual(hotspot["persistence_score"], 64.3)
+        self.assertEqual(hotspot["sample_stock_count"], 11)
+        self.assertEqual(hotspot["leaders"], ["嘉元科技", "方邦股份"])
 
     def test_hotspots_default_cache_miss_does_not_import_hotspot_module(self) -> None:
         config = self._config(enabled=True)
@@ -326,6 +421,36 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["hotspot_count"], 0)
         self.assertEqual(payload["source_errors"], [])
         import_hotspot.assert_not_called()
+
+    def test_hotspots_ignores_too_thin_default_cache(self) -> None:
+        config = self._config(enabled=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "hotspots.json"
+            cache_path.write_text(
+                json.dumps({
+                    "cached_at": "2026-06-13T08:06:50Z",
+                    "payload": {
+                        "enabled": True,
+                        "provider": "akshare",
+                        "hotspots": [{"topic": "AI算力", "name": "AI算力", "heat_score": 88.0}],
+                        "hotspot_count": 1,
+                    },
+                }),
+                encoding="utf-8",
+            )
+            import_hotspot = MagicMock(side_effect=AssertionError("default cache read must not import live hotspot module"))
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", import_hotspot),
+            ):
+                payload = self._hotspots(config=config, provider="akshare", top=12, refresh=False)
+
+        self.assertEqual(payload["hotspots"], [])
+        self.assertEqual(payload["hotspot_count"], 0)
+        import_hotspot.assert_not_called()
+
 
     def test_hotspots_uses_last_success_cache_by_default(self) -> None:
         config = self._config(enabled=True)
@@ -400,12 +525,15 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
+            provider = alphasift_service.DsaEastMoneyHotspotProvider()
+            provider.hotspot_rows = MagicMock(return_value=[])
             with (
                 patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
                 patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
                 patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
             ):
-                payload = self._hotspots(config=config, provider="akshare", top=12, refresh=True)
+                payload = self._hotspots(config=config, provider="akshare", top=1, refresh=True)
 
         self.assertEqual(payload["cache_used"], True)
         self.assertEqual(payload["fallback_used"], True)
@@ -425,7 +553,9 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
             stale_age_hours = None
 
         rows = HotspotRows([
-            {"topic": "机器人执行器", "heat_score": 86.0},
+            {"topic": "机器人执行器", "heat_score": 86.0, "change_pct": 4.2},
+            {"topic": "减速器", "heat_score": 82.0, "change_pct": 3.8},
+            {"topic": "铜", "heat_score": 80.0, "change_pct": 3.2},
         ])
         captured: Dict[str, Any] = {}
 
@@ -463,9 +593,406 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
             ):
                 cached = self._hotspots(config=config, provider="akshare", top=1, refresh=False)
 
+            cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+
         self.assertEqual(cached["cache_used"], True)
         self.assertEqual(cached["hotspots"][0]["topic"], "机器人执行器")
         discover_again.assert_not_called()
+        self.assertEqual(cache_payload["schema_version"], 2)
+        self.assertEqual(cache_payload["hotspots"][0]["topic"], "机器人执行器")
+
+    def test_hotspots_reads_alphasift_v2_hotspot_cache(self) -> None:
+        config = self._config(enabled=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "hotspots.json"
+            cache_path.write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "generated_at": "2026-06-13T02:55:00Z",
+                    "source_errors": "provider timeout",
+                    "metadata": {"schema_version": 2, "provider_used": "last_good_cache"},
+                    "hotspots": [
+                        {
+                            "topic": "算力",
+                            "canonical_topic": "算力",
+                            "aliases": ["AI算力"],
+                            "heat_score": 88.0,
+                            "quality_status": "available",
+                        }
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            discover = MagicMock()
+            with (
+                patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
+            ):
+                cached = self._hotspots(config=config, provider="akshare", top=1, refresh=False)
+
+        self.assertEqual(cached["cache_used"], True)
+        self.assertEqual(cached["cached_at"], "2026-06-13T02:55:00Z")
+        self.assertEqual(cached["schema_version"], 2)
+        self.assertEqual(cached["source_errors"], ["provider timeout"])
+        self.assertEqual(cached["hotspots"][0]["canonical_topic"], "算力")
+        discover.assert_not_called()
+
+    def test_hotspots_refresh_prefetches_detail_payloads(self) -> None:
+        config = self._config(enabled=True)
+
+        class HotspotRows(list):
+            provider_used = "akshare"
+            fallback_used = False
+            source_errors = []
+            stale = False
+            stale_age_hours = None
+
+        rows = HotspotRows([
+            {"topic": "Moly", "heat_score": 96.0, "change_pct": 10.0},
+            {"topic": "Copper", "heat_score": 88.0, "change_pct": 6.0},
+        ])
+
+        def detail_side_effect(*, topic: str, provider: str = "", refresh: bool = False) -> Dict[str, Any]:
+            return {
+                "enabled": True,
+                "provider": provider,
+                "topic": topic,
+                "summary": f"{topic} summary",
+                "route": [{"title": f"{topic} event", "description": f"{topic} catalyst"}],
+                "stocks": [],
+                "stock_count": 0,
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir) / "alphasift"
+            with (
+                patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(data_dir)}, clear=False),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch(
+                    "src.services.alphasift_service._import_alphasift_hotspot",
+                    return_value=SimpleNamespace(discover_hotspots=MagicMock(return_value=rows)),
+                ),
+                patch.object(alphasift_service.AlphaSiftService, "hotspot_detail", side_effect=detail_side_effect) as detail_mock,
+            ):
+                payload = self._hotspots(config=config, provider="akshare", top=2, refresh=True, include_details=True)
+
+            cache_payload = json.loads((data_dir / "hotspots.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(set(payload["details"].keys()), {"Moly", "Copper"})
+        self.assertEqual(payload["details"]["Moly"]["route"][0]["title"], "Moly event")
+        self.assertEqual(cache_payload["payload"]["details"]["Copper"]["summary"], "Copper summary")
+        self.assertEqual(detail_mock.call_count, 2)
+
+    def test_hotspot_news_local_summary_extracts_event_instead_of_truncating(self) -> None:
+        text = (
+            "【股商异动】钼板块异动大涨5.64%！金钼股份涨停，机构看好行业机遇。"
+            "消息称以钼代钨带动小金属行情，市场关注材料替代和供需偏紧。"
+            "截至10:30，相关个股现价和成交额继续变化，后续建议关注供需平衡。"
+        )
+
+        summary = alphasift_service._summarize_hotspot_news_event_locally(topic="钼", text=text)
+
+        self.assertIn("以钼代钨", summary)
+        self.assertIn("小金属", summary)
+        self.assertNotIn("截至", summary)
+        self.assertNotIn("后续建议", summary)
+        self.assertLessEqual(len(summary), alphasift_service.DSA_ALPHASIFT_HOTSPOT_EVENT_SUMMARY_MAX_CHARS)
+
+    def test_hotspot_detail_uses_alphasift_contract_detail_cache(self) -> None:
+        config = self._config(enabled=True)
+        captured: Dict[str, Any] = {}
+
+        def get_hotspot_detail(topic: str, **kwargs: Any) -> Dict[str, Any]:
+            captured.update({"topic": topic, **kwargs})
+            return {
+                "summary": {
+                    "topic": topic,
+                    "name": "算力",
+                    "canonical_topic": "算力",
+                    "aliases": "AI算力",
+                    "heat_score": 88.0,
+                    "stage": "加速主升",
+                    "leaders": ["算力龙头"],
+                    "quality_status": "stale",
+                    "missing_fields": "live_stocks",
+                    "source_errors": "none: no live detail rows",
+                    "fallback_used": True,
+                    "stale": True,
+                    "stale_age_hours": 1.5,
+                    "resolver_candidates": [{"topic": "算力", "confidence": 1.0}],
+                },
+                "stocks": [{
+                    "code": "300001",
+                    "name": "算力龙头",
+                    "role": "核心龙头",
+                    "source": "last_good_cache.leader_stocks",
+                    "source_confidence": 0.65,
+                    "fallback_used": True,
+                }],
+                "timeline": [{"date": "2026-06-13", "source": "新闻", "title": "AI算力催化"}],
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir) / "alphasift"
+            provider = alphasift_service.DsaEastMoneyHotspotProvider()
+            with (
+                patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(data_dir)}, clear=False),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch(
+                    "src.services.alphasift_service._import_alphasift_hotspot",
+                    return_value=SimpleNamespace(get_hotspot_detail=get_hotspot_detail),
+                ),
+            ):
+                payload = self._hotspot_detail(config=config, provider="akshare", topic="AI算力")
+
+        self.assertEqual(captured["topic"], "AI算力")
+        self.assertIs(captured["provider"], provider)
+        self.assertEqual(captured["fallback_cache_path"], data_dir / "hotspots.json")
+        self.assertEqual(captured["history_path"], data_dir / "hotspot.history.jsonl")
+        self.assertEqual(payload["enabled"], True)
+        self.assertEqual(payload["provider"], "akshare")
+        self.assertEqual(payload["topic"], "AI算力")
+        self.assertEqual(payload["canonical_topic"], "算力")
+        self.assertEqual(payload["quality_status"], "stale")
+        self.assertEqual(payload["aliases"], ["AI算力"])
+        self.assertEqual(payload["missing_fields"], ["live_stocks"])
+        self.assertEqual(payload["source_errors"], ["none: no live detail rows"])
+        self.assertEqual(payload["stocks"][0]["source"], "last_good_cache.leader_stocks")
+        self.assertEqual(payload["route"][0]["title"], "AI算力催化")
+
+    def test_hotspot_detail_uses_dsa_detail_cache_after_first_fetch(self) -> None:
+        config = self._config(enabled=True)
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(return_value={
+            "topic": "钼",
+            "name": "小金属 · 钼",
+            "summary": "钼 当前涨跌幅 10.00%。",
+            "route": [{"title": "当日发酵", "description": "钼板块异动。", "source": "eastmoney_board_change"}],
+            "stocks": [{"code": "001257", "name": "盛龙股份"}],
+            "stock_count": 1,
+            "source_errors": [],
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(Path(tmpdir) / "alphasift")}, clear=False),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace()),
+            ):
+                first = self._hotspot_detail(config=config, provider="akshare", topic="钼")
+                second = self._hotspot_detail(config=config, provider="akshare", topic="钼")
+
+        provider.hotspot_detail.assert_called_once_with("钼")
+        self.assertFalse(first.get("cache_used", False))
+        self.assertTrue(second["cache_used"])
+        self.assertEqual(second["stocks"][0]["name"], "盛龙股份")
+
+    def test_hotspot_detail_refresh_bypasses_dsa_detail_cache(self) -> None:
+        config = self._config(enabled=True)
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(side_effect=[
+            {
+                "topic": "钼",
+                "summary": "旧详情",
+                "route": [{"title": "旧发酵", "description": "旧缓存", "source": "eastmoney_board_change"}],
+                "stocks": [{"code": "001257", "name": "旧龙头"}],
+                "stock_count": 1,
+                "source_errors": [],
+            },
+            {
+                "topic": "钼",
+                "summary": "新详情",
+                "route": [{"title": "新发酵", "description": "实时刷新", "source": "eastmoney_board_change"}],
+                "stocks": [{"code": "001257", "name": "新龙头"}],
+                "stock_count": 1,
+                "source_errors": [],
+            },
+        ])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(Path(tmpdir) / "alphasift")}, clear=False),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace()),
+            ):
+                first = self._hotspot_detail(config=config, provider="akshare", topic="钼")
+                cached = self._hotspot_detail(config=config, provider="akshare", topic="钼")
+                refreshed = self._hotspot_detail(config=config, provider="akshare", topic="钼", refresh=True)
+
+        self.assertEqual(provider.hotspot_detail.call_count, 2)
+        self.assertEqual(first["stocks"][0]["name"], "旧龙头")
+        self.assertEqual(cached["stocks"][0]["name"], "旧龙头")
+        self.assertTrue(cached["cache_used"])
+        self.assertEqual(refreshed["stocks"][0]["name"], "新龙头")
+        self.assertFalse(refreshed.get("cache_used", False))
+
+    def test_hotspot_detail_adds_real_search_event_when_configured(self) -> None:
+        config = Config(alphasift_enabled=True, bocha_api_keys=["test-key"])
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(return_value={
+            "topic": "钼",
+            "summary": "钼 当前涨跌幅 10.00%。",
+            "route": [{"title": "当日发酵", "description": "钼板块异动。", "source": "eastmoney_board_change"}],
+            "stocks": [],
+            "stock_count": 0,
+            "source_errors": [],
+        })
+        search_service = MagicMock()
+        search_service.search_stock_news.return_value = SimpleNamespace(
+            success=True,
+            provider="Bocha",
+            results=[
+                SimpleNamespace(
+                    title="以钼代钨带动小金属行情",
+                    snippet=(
+                        "以钼代钨带动小金属行情 2026-06-12 市场关注材料替代和供需偏紧。"
+                        "金钼股份、盛龙股份等相关个股出现异动，报道还详细列出价格、成交、"
+                        "机构观点、供需格局和完整产业链背景，后续建议继续关注供需平衡与政策动力。"
+                    ),
+                    url="https://example.com/news",
+                    source="ExampleNews",
+                    published_date="2026-06-12",
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(Path(tmpdir) / "alphasift")}, clear=False),
+                patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+                patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace()),
+                patch("src.search_service.SearchService", return_value=search_service),
+            ):
+                payload = self._hotspot_detail(config=config, provider="akshare", topic="钼")
+
+        self.assertEqual(payload["route"][0]["source"], "ExampleNews")
+        self.assertEqual(payload["route"][0]["title"], "消息催化")
+        self.assertEqual(payload["route"][0]["date"], "2026-06-12")
+        self.assertEqual(payload["route"][0]["url"], "https://example.com/news")
+        self.assertLessEqual(len(payload["route"][0]["description"]), 93)
+        self.assertNotIn("完整产业链背景", payload["route"][0]["description"])
+        search_service.search_stock_news.assert_called_once()
+
+    def test_hotspot_detail_prefers_timeline_when_contract_route_is_empty(self) -> None:
+        config = self._config(enabled=True)
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(side_effect=RuntimeError("provider fallback should not be used"))
+
+        def get_hotspot_detail(topic: str, **_kwargs: Any) -> Dict[str, Any]:
+            return {
+                "summary": {
+                    "topic": topic,
+                    "name": "算力",
+                    "canonical_topic": "算力",
+                    "quality_status": "available",
+                },
+                "stocks": [{
+                    "code": "300001",
+                    "name": "算力龙头",
+                }],
+                "timeline": [{"date": "2026-06-13", "source": "新闻", "title": "AI算力催化"}],
+                "route": [],
+            }
+
+        with (
+            patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+            patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+            patch(
+                "src.services.alphasift_service._import_alphasift_hotspot",
+                return_value=SimpleNamespace(get_hotspot_detail=get_hotspot_detail),
+            ),
+        ):
+            payload = self._hotspot_detail(config=config, provider="akshare", topic="AI算力")
+
+        self.assertEqual(payload["route"][0]["title"], "AI算力催化")
+        self.assertEqual(payload["route"][0]["source"], "新闻")
+        provider.hotspot_detail.assert_not_called()
+
+    def test_hotspot_detail_falls_back_to_provider_when_contract_helper_fails(self) -> None:
+        config = self._config(enabled=True)
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(return_value={
+            "topic": "机器人执行器",
+            "summary": "机器人执行器 盘中发酵。",
+            "route": [{"title": "盘中发酵", "description": "provider fallback route.", "source": "eastmoney_board_change"}],
+            "stocks": [{"code": "002000", "name": "旧路径个股"}],
+            "stock_count": 1,
+            "source_errors": [],
+        })
+
+        def get_hotspot_detail(topic: str, **_kwargs: Any) -> Dict[str, Any]:
+            raise RuntimeError("contract parser broken")
+
+        with (
+            patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+            patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+            patch(
+                "src.services.alphasift_service._import_alphasift_hotspot",
+                return_value=SimpleNamespace(get_hotspot_detail=get_hotspot_detail),
+            ),
+        ):
+            payload = self._hotspot_detail(config=config, provider="akshare", topic="机器人执行器")
+
+        self.assertEqual(payload["route"][0]["title"], "盘中发酵")
+        self.assertEqual(payload["route"][0]["source"], "eastmoney_board_change")
+        provider.hotspot_detail.assert_called_once_with("机器人执行器")
+        self.assertEqual(
+            payload["source_errors"][0],
+            "alphasift_hotspot_detail_fallback: contract parser broken",
+        )
+        self.assertTrue(payload["fallback_used"])
+
+    def test_hotspot_detail_preserves_provider_route_when_contract_detail_has_no_timeline(self) -> None:
+        config = self._config(enabled=True)
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider.hotspot_detail = MagicMock(return_value={
+            "topic": "机器人执行器",
+            "summary": "机器人执行器 盘中发酵。",
+            "route": [{
+                "title": "盘中发酵",
+                "description": "机器人执行器 当前有异动记录。",
+                "source": "eastmoney_board_change",
+            }],
+            "stocks": [{"code": "002000", "name": "旧路径个股"}],
+            "stock_count": 1,
+            "source_errors": [],
+        })
+
+        def get_hotspot_detail(topic: str, **_kwargs: Any) -> Dict[str, Any]:
+            return {
+                "summary": {
+                    "topic": topic,
+                    "name": "机器人执行器",
+                    "canonical_topic": "机器人执行器",
+                    "quality_status": "available",
+                },
+                "stocks": [{
+                    "code": "300000",
+                    "name": "合约路径个股",
+                    "source": "alphasift_contract",
+                }],
+            }
+
+        with (
+            patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+            patch("src.services.alphasift_service._resolve_hotspot_provider", return_value=("akshare", provider)),
+            patch(
+                "src.services.alphasift_service._import_alphasift_hotspot",
+                return_value=SimpleNamespace(get_hotspot_detail=get_hotspot_detail),
+            ),
+        ):
+            payload = self._hotspot_detail(config=config, provider="akshare", topic="机器人执行器")
+
+        self.assertEqual(payload["route"][0]["title"], "盘中发酵")
+        self.assertEqual(payload["route"][0]["source"], "eastmoney_board_change")
+        self.assertEqual(payload["stocks"][0]["name"], "合约路径个股")
+        provider.hotspot_detail.assert_called_once_with("机器人执行器")
 
     def test_hotspot_detail_returns_route_and_concept_stocks(self) -> None:
         config = self._config(enabled=True)
@@ -513,7 +1040,7 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["topic"], "DRG/DIP")
-        service.hotspot_detail.assert_called_once_with(topic="DRG/DIP", provider="akshare")
+        service.hotspot_detail.assert_called_once_with(topic="DRG/DIP", provider="akshare", refresh=False)
 
     def test_hotspot_detail_falls_back_when_ths_constituents_fail(self) -> None:
         import pandas as pd
@@ -555,6 +1082,93 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         self.assertEqual(payload["topic"], "AI算力")
         self.assertEqual(payload["stocks"][0]["name"], "中际旭创")
         self.assertEqual(payload["route"][0]["title"], "fallback")
+
+    def test_hotspot_provider_merges_constituent_sources_before_single_leader_fallback(self) -> None:
+        import pandas as pd
+
+        class FakeProvider(alphasift_service.DsaEastMoneyHotspotProvider):
+            def _fetch_eastmoney_constituents(self, topic: str, *, source: str) -> Any:
+                return pd.DataFrame([
+                    {"代码": "000001", "名称": "平安银行", "涨跌幅": 1.2},
+                    {"代码": "000002", "名称": "万科A", "涨跌幅": 0.8},
+                ])
+
+            def _fetch_ths_constituents(self, topic: str) -> Any:
+                return pd.DataFrame([
+                    {"code": "000002", "name": "万科A"},
+                    {"code": "000003", "name": "国农科技"},
+                ])
+
+            def _fallback_constituents(self, topic: str) -> Any:
+                return pd.DataFrame([{
+                    "code": "000001",
+                    "name": "平安银行",
+                    "hot_stock_score": 60.0,
+                }])
+
+        provider = FakeProvider()
+        frame = provider.stock_board_concept_cons_em("金融")
+
+        self.assertEqual(list(frame["code"]), ["000001", "000002", "000003"])
+        self.assertEqual(provider.stock_board_concept_cons_em("金融").shape[0], 3)
+
+    def test_hotspot_provider_adds_related_metal_leaders_for_narrow_topic(self) -> None:
+        import pandas as pd
+
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        raw = pd.DataFrame([
+            {
+                "板块名称": "钼",
+                "涨跌幅": 10.0,
+                "板块异动最频繁个股及所属类型-股票代码": "001257",
+                "板块异动最频繁个股及所属类型-股票名称": "盛龙股份",
+            },
+            {
+                "板块名称": "钴",
+                "涨跌幅": 5.9,
+                "板块异动最频繁个股及所属类型-股票代码": "300618",
+                "板块异动最频繁个股及所属类型-股票名称": "寒锐钴业",
+            },
+            {
+                "板块名称": "铜",
+                "涨跌幅": 7.0,
+                "板块异动最频繁个股及所属类型-股票代码": "600362",
+                "板块异动最频繁个股及所属类型-股票名称": "江西铜业",
+            },
+        ])
+        with patch.object(provider, "_fetch_board_changes_raw", return_value=raw):
+            frame = provider._related_hotspot_constituents("钼")
+
+        self.assertEqual(list(frame["code"]), ["001257", "300618"])
+        self.assertEqual(frame.iloc[0]["role"], "小金属活跃股")
+
+    def test_hotspot_route_is_grouped_by_daily_markers(self) -> None:
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider._fetch_ths_summary_event = MagicMock(return_value="2026-06-12：政策催化")
+        summary = {
+            "板块名称": "AI算力",
+            "涨跌幅": 4.2,
+            "板块异动总次数": 186,
+            "板块异动最频繁个股及所属类型-股票名称": "中际旭创",
+            "板块具体异动类型列表及出现次数": [{"t": 8203, "ct": 8}, {"t": 8204, "ct": 6}],
+        }
+
+        route = provider._build_hotspot_route("AI算力", summary)
+
+        self.assertLessEqual(len(route), 2)
+        self.assertEqual(route[0]["date"], datetime.now().date().isoformat())
+        self.assertEqual(route[0]["published_at"], route[0]["date"])
+        self.assertIn("当日结构", route[0]["description"])
+        self.assertEqual(route[1]["date"], "2026-06-12")
+
+    def test_hotspot_route_does_not_invent_metal_catalyst_hint(self) -> None:
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        provider._fetch_ths_summary_event = MagicMock(return_value="")
+
+        route = provider._build_hotspot_route("钼", {})
+
+        self.assertEqual(route[0]["source"], "fallback")
+        self.assertNotIn("以钼代钨", route[0]["description"])
 
     def test_hotspot_detail_uses_constituent_fallback_when_board_change_summary_fails(self) -> None:
         import pandas as pd
@@ -670,6 +1284,40 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
 
         self.assertEqual(concept.iloc[0]["name"], "减速器")
         fetch_rankings.assert_called_once_with("concept")
+
+    def test_hotspot_provider_derives_trend_metrics_from_board_changes(self) -> None:
+        import pandas as pd
+
+        board_changes = pd.DataFrame([
+            {
+                "板块名称": "AI算力",
+                "涨跌幅": 4.2,
+                "板块异动总次数": 186,
+                "板块异动最频繁个股及所属类型-股票名称": "中际旭创",
+            },
+        ])
+
+        class _MockAkshare:
+            calls = 0
+
+            @staticmethod
+            def stock_board_change_em():
+                _MockAkshare.calls += 1
+                return board_changes
+
+        provider = alphasift_service.DsaEastMoneyHotspotProvider()
+        with patch.dict("sys.modules", {"akshare": _MockAkshare()}):
+            frame = provider._fetch_board_changes()
+            summary = provider._find_board_change("AI算力")
+
+        self.assertEqual(_MockAkshare.calls, 1)
+        self.assertEqual(frame.iloc[0]["name"], "AI算力")
+        self.assertEqual(frame.iloc[0]["stage"], "加速发酵")
+        self.assertGreater(frame.iloc[0]["trend_score"], 0)
+        self.assertGreater(frame.iloc[0]["persistence_score"], 0)
+        self.assertEqual(frame.iloc[0]["sample_stock_count"], 1)
+        self.assertEqual(frame.iloc[0]["leaders"], ["中际旭创"])
+        self.assertEqual(summary["板块名称"], "AI算力")
 
     def test_fetch_ths_summary_event_ignores_missing_concept_name_column(self) -> None:
         import pandas as pd

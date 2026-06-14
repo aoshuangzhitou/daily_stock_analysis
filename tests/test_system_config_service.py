@@ -732,7 +732,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             "LLM_OPENAI_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
             "LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
             "ALPHASIFT_ENABLED=false",
-            "ALPHASIFT_INSTALL_SPEC=git+https://github.com/ZhuLinsen/alphasift.git@de54ea0da367be85770d9589a5bf7ded4f62d386",
+            "ALPHASIFT_INSTALL_SPEC=git+https://github.com/ZhuLinsen/alphasift.git@d038c52c468543726fc1fd830b53c27d3f09d6da",
             "GEMINI_API_KEY=legacy-secret",
         )
 
@@ -756,7 +756,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(current_map["ALPHASIFT_ENABLED"], "true")
         self.assertEqual(
             current_map["ALPHASIFT_INSTALL_SPEC"],
-            "git+https://github.com/ZhuLinsen/alphasift.git@de54ea0da367be85770d9589a5bf7ded4f62d386",
+            "git+https://github.com/ZhuLinsen/alphasift.git@d038c52c468543726fc1fd830b53c27d3f09d6da",
         )
         self.assertEqual(current_map["GEMINI_API_KEY"], "legacy-secret")
         self.assertEqual(current_map["LITELLM_MODEL"], "openai/gpt-4o-mini")
