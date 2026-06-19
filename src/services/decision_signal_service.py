@@ -484,6 +484,12 @@ class DecisionSignalService:
         return list(dict.fromkeys([normalized, hk_normalized]))
 
     @classmethod
+    def normalize_stock_code_for_signal(cls, value: Any, *, market: Optional[str] = None) -> str:
+        """Normalize a stock code for DecisionSignal identity matching."""
+
+        return cls._normalize_stock_code(value, market=market)
+
+    @classmethod
     def _normalize_stock_code(cls, value: Any, *, market: Optional[str] = None) -> str:
         raw = str(value or "").strip()
         if market == "us":

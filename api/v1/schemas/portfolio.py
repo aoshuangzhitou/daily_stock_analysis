@@ -263,6 +263,20 @@ class PortfolioFxRefreshResponse(BaseModel):
     error_count: int
 
 
+class PortfolioDecisionSignalRiskItem(BaseModel):
+    account_id: Optional[int] = None
+    symbol: str
+    market: str
+    signal: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PortfolioDecisionSignalRiskBlock(BaseModel):
+    available: bool = True
+    total: int = 0
+    actions: Dict[str, int] = Field(default_factory=dict)
+    items: List[PortfolioDecisionSignalRiskItem] = Field(default_factory=list)
+
+
 class PortfolioRiskResponse(BaseModel):
     as_of: str
     account_id: Optional[int] = None
@@ -273,3 +287,4 @@ class PortfolioRiskResponse(BaseModel):
     sector_concentration: Dict[str, Any] = Field(default_factory=dict)
     drawdown: Dict[str, Any] = Field(default_factory=dict)
     stop_loss: Dict[str, Any] = Field(default_factory=dict)
+    decision_signal_risk: PortfolioDecisionSignalRiskBlock = Field(default_factory=PortfolioDecisionSignalRiskBlock)
