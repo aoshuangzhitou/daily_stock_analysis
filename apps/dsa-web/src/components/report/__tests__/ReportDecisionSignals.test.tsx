@@ -79,6 +79,12 @@ describe('ReportDecisionSignals', () => {
 
     expect(await screen.findByText('腾讯控股')).toBeInTheDocument();
     expect(screen.getByText('缺少成交量确认')).toBeInTheDocument();
+    expect(screen.getByText('周期: 5 日')).toBeInTheDocument();
+    expect(screen.getByText('计划质量: 部分')).toBeInTheDocument();
+    expect(screen.getByText('阶段: 盘后')).toBeInTheDocument();
+    expect(screen.queryByText('5d')).not.toBeInTheDocument();
+    expect(screen.queryByText('postmarket')).not.toBeInTheDocument();
+    expect(screen.queryByText('partial')).not.toBeInTheDocument();
     expect(decisionSignalsApi.list).toHaveBeenCalledWith({
       sourceReportId: 5,
       sourceType: 'analysis',

@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional
 
-from src.core.trading_calendar import MarketPhase
+from src.core.trading_calendar import MarketPhase, build_market_phase_context, get_market_for_stock
 
 
 MARKET_PHASE_SUMMARY_KEY = "market_phase_summary"
@@ -109,6 +110,56 @@ def extract_market_phase_summary(context_snapshot: Any) -> Optional[Dict[str, An
     if not isinstance(summary, Mapping):
         return None
     return render_market_phase_summary(summary)
+
+
+def _parse_phase_local_time(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def rebuild_market_phase_summary_for_stock_code(
+    stock_code: Any,
+    context_snapshot: Any,
+) -> Optional[Dict[str, Any]]:
+    """Rebuild phase summary with derived fields for JP/KR display codes.
+
+    Legacy CN snapshots on JP/KR stock records can retain CN-local values. This
+    helper recomputes those derived fields using the target market context while
+    preserving non-derived source fields when possible.
+    """
+    summary = extract_market_phase_summary(context_snapshot)
+    if not isinstance(summary, Mapping):
+        return None
+
+    market = get_market_for_stock(str(stock_code or "").strip())
+    if market not in {"jp", "kr"}:
+        return dict(summary)
+
+    phase = str(summary.get("phase", "")).strip()
+    analysis_phase = phase if phase in _ALLOWED_PHASES else "auto"
+    analysis_intent = str(summary.get("analysis_intent") or "auto").strip()
+    if not analysis_intent:
+        analysis_intent = "auto"
+
+    rebuilt = build_market_phase_context(
+        market=market,
+        current_time=_parse_phase_local_time(summary.get("market_local_time")),
+        trigger_source=str(summary.get("trigger_source") or "system").strip() or "system",
+        analysis_intent=analysis_intent,
+        analysis_phase=analysis_phase,
+    ).to_dict()
+
+    rebuilt.setdefault("warnings", list(summary.get("warnings") or []))
+    if not rebuilt.get("warnings"):
+        rebuilt["warnings"] = list(summary.get("warnings") or [])
+
+    return rebuilt
 
 
 def normalize_analysis_phase_bucket(value: Any) -> str:

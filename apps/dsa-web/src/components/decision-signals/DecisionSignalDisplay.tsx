@@ -18,6 +18,12 @@ import {
 } from '../../utils/decisionAction';
 import { cn } from '../../utils/cn';
 import { parseDecisionSignalDate } from '../../utils/decisionSignalTime';
+import {
+  getDecisionSignalHorizonLabel,
+  getDecisionSignalMarketLabel,
+  getDecisionSignalMarketPhaseLabel,
+  getDecisionSignalPlanQualityLabel,
+} from '../../utils/decisionSignalLabels';
 
 type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history';
 
@@ -120,11 +126,6 @@ function getActionVariant(item: DecisionSignalItem): BadgeVariant {
   return ACTION_VARIANTS[getDecisionActionTone(item.action, item.actionLabel, null)];
 }
 
-function getMarketLabel(market: DecisionSignalItem['market'], t: (key: UiTextKey) => string): string {
-  const key = `decisionSignals.market.${market}` as UiTextKey;
-  return t(key);
-}
-
 function getOutcomeLabel(value: DecisionSignalOutcomeValue | null | undefined, t: (key: UiTextKey) => string): string {
   if (!value) return '-';
   const key = `decisionSignals.outcome.${value}` as UiTextKey;
@@ -166,7 +167,7 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
           </h3>
         </div>
         <div className="text-right text-xs text-secondary-text">
-          <div>{getMarketLabel(item.market, t)}</div>
+          <div>{getDecisionSignalMarketLabel(item.market, t)}</div>
           <div className="mt-1">{formatDateTime(item.createdAt, language)}</div>
         </div>
       </div>
@@ -176,9 +177,9 @@ export const DecisionSignalCard: React.FC<DecisionSignalCardProps> = ({ item, on
         {item.watchConditions ? <p className="line-clamp-2">{item.watchConditions}</p> : null}
       </div>
       <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-text">
-        <span>{t('decisionSignals.horizon')}: {item.horizon || '-'}</span>
-        <span>{t('decisionSignals.planQuality')}: {item.planQuality}</span>
-        <span>{t('decisionSignals.marketPhase')}: {item.marketPhase || '-'}</span>
+        <span>{t('decisionSignals.horizon')}: {getDecisionSignalHorizonLabel(item.horizon, t)}</span>
+        <span>{t('decisionSignals.planQuality')}: {getDecisionSignalPlanQualityLabel(item.planQuality, t)}</span>
+        <span>{t('decisionSignals.marketPhase')}: {getDecisionSignalMarketPhaseLabel(item.marketPhase, t)}</span>
       </div>
     </>
   );
@@ -257,7 +258,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
             <Badge variant={STATUS_VARIANTS[item.status]} size="md">{t(STATUS_LABEL_KEYS[item.status])}</Badge>
           </div>
           <h3 className="mt-3 text-xl font-semibold text-foreground">{item.stockName || item.stockCode}</h3>
-          <p className="mt-1 font-mono text-sm text-secondary-text">{item.stockCode} · {getMarketLabel(item.market, t)}</p>
+          <p className="mt-1 font-mono text-sm text-secondary-text">{item.stockCode} · {getDecisionSignalMarketLabel(item.market, t)}</p>
         </div>
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
       </div>
@@ -265,9 +266,9 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
       <div className="grid gap-3 sm:grid-cols-2">
         <DetailRow label={t('decisionSignals.score')} value={formatNumber(item.score)} />
         <DetailRow label={t('decisionSignals.confidence')} value={formatNumber(item.confidence)} />
-        <DetailRow label={t('decisionSignals.horizon')} value={item.horizon || '-'} />
-        <DetailRow label={t('decisionSignals.planQuality')} value={item.planQuality} />
-        <DetailRow label={t('decisionSignals.marketPhase')} value={item.marketPhase || '-'} />
+        <DetailRow label={t('decisionSignals.horizon')} value={getDecisionSignalHorizonLabel(item.horizon, t)} />
+        <DetailRow label={t('decisionSignals.planQuality')} value={getDecisionSignalPlanQualityLabel(item.planQuality, t)} />
+        <DetailRow label={t('decisionSignals.marketPhase')} value={getDecisionSignalMarketPhaseLabel(item.marketPhase, t)} />
         <DetailRow label={t('decisionSignals.sourceReport')} value={item.sourceReportId ? `#${item.sourceReportId}` : '-'} />
         <DetailRow label={t('decisionSignals.createdAt')} value={formatDateTime(item.createdAt, language)} />
         <DetailRow label={t('decisionSignals.expiresAt')} value={formatDateTime(item.expiresAt, language)} />
@@ -294,7 +295,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
               <div key={outcome.id} className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-foreground">{outcome.horizon}</span>
+                    <span className="text-sm font-medium text-foreground">{getDecisionSignalHorizonLabel(outcome.horizon, t)}</span>
                     {outcome.outcome ? (
                       <Badge variant={OUTCOME_VARIANTS[outcome.outcome]}>
                         {getOutcomeLabel(outcome.outcome, t)}
@@ -395,7 +396,7 @@ export const PortfolioSignalSummary: React.FC<PortfolioSignalSummaryProps> = ({ 
     <div className="min-w-[11rem] max-w-[18rem] text-left">
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         <Badge variant={getActionVariant(item)}>{actionLabel}</Badge>
-        {item.horizon ? <span className="text-[11px] text-secondary-text">{item.horizon}</span> : null}
+        {item.horizon ? <span className="text-[11px] text-secondary-text">{getDecisionSignalHorizonLabel(item.horizon, t)}</span> : null}
       </div>
       {item.riskSummary ? <p className="mt-1 line-clamp-2 text-[11px] text-warning">{item.riskSummary}</p> : null}
       {item.watchConditions ? <p className="mt-1 line-clamp-2 text-[11px] text-secondary-text">{item.watchConditions}</p> : null}

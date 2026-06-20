@@ -185,6 +185,43 @@ describe('DecisionSignalsPage', () => {
     expect(screen.getByText(formattedCreatedAt)).toBeInTheDocument();
   });
 
+  it('renders decision signal enum filter labels in Chinese', async () => {
+    renderPage();
+    await screen.findByText('贵州茅台');
+
+    expect(within(screen.getByLabelText('市场')).getByRole('option', { name: '日股' })).toHaveValue('jp');
+    expect(within(screen.getByLabelText('市场')).getByRole('option', { name: '韩股' })).toHaveValue('kr');
+    expect(within(screen.getByLabelText('阶段')).getByRole('option', { name: '午间休市' })).toHaveValue('lunch_break');
+    expect(within(screen.getByLabelText('阶段')).getByRole('option', { name: '集合竞价' })).toHaveValue('closing_auction');
+    expect(within(screen.getByLabelText('来源')).getByRole('option', { name: '大盘复盘' })).toHaveValue('market_review');
+  });
+
+  it('renders decision signal filters and card value labels in English', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValueOnce(listResponse([
+      makeSignal({
+        market: 'jp',
+        marketPhase: 'closing_auction',
+        horizon: '10d',
+        planQuality: 'partial',
+      }),
+    ]));
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'AI signals' })).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Market')).getByRole('option', { name: 'Japan' })).toHaveValue('jp');
+    expect(within(screen.getByLabelText('Market')).getByRole('option', { name: 'Korea' })).toHaveValue('kr');
+    expect(within(screen.getByLabelText('Phase')).getByRole('option', { name: 'Closing auction' })).toHaveValue('closing_auction');
+    expect(within(screen.getByLabelText('Source')).getByRole('option', { name: 'Market review' })).toHaveValue('market_review');
+    expect(screen.getAllByText('Japan').length).toBeGreaterThan(1);
+    expect(screen.getByText('Horizon: 10 days')).toBeInTheDocument();
+    expect(screen.getByText('Plan quality: Partial')).toBeInTheDocument();
+    expect(screen.getByText('Phase: Closing auction')).toBeInTheDocument();
+    expect(screen.queryByText('10d')).not.toBeInTheDocument();
+    expect(screen.queryByText('closing_auction')).not.toBeInTheDocument();
+  });
+
   it('passes filter parameters when applying filters', async () => {
     renderPage();
     await screen.findByText('贵州茅台');

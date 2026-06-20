@@ -190,6 +190,21 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
         )
 
+    def test_standalone_run_resolves_stocks_before_run_full_analysis(self) -> None:
+        args = self._make_args(stocks="005930")
+        config = self._make_config(run_immediately=True)
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis") as run_full_analysis:
+            exit_code = main.main()
+
+        self.assertEqual(exit_code, 0)
+        run_full_analysis.assert_called_once()
+        _, _, stock_codes = run_full_analysis.call_args.args
+        self.assertEqual(stock_codes, ["005930.KS"])
+
     def test_schedule_mode_reload_uses_latest_runtime_config(self) -> None:
         args = self._make_args(schedule=True)
         startup_config = self._make_config(schedule_enabled=True, schedule_time="18:00")

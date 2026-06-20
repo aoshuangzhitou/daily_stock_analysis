@@ -34,6 +34,11 @@ import type {
 } from '../types/decisionSignals';
 import { cn } from '../utils/cn';
 import { buildDecisionActionLabelMap } from '../utils/decisionAction';
+import {
+  getDecisionSignalMarketLabel,
+  getDecisionSignalMarketPhaseLabel,
+  getDecisionSignalSourceTypeLabel,
+} from '../utils/decisionSignalLabels';
 
 const PAGE_SIZE = 20;
 
@@ -57,7 +62,7 @@ type SelectedSignal = {
   source: 'list' | 'latest';
 };
 
-const MARKET_OPTIONS: DecisionSignalMarket[] = ['cn', 'hk', 'us'];
+const MARKET_OPTIONS: DecisionSignalMarket[] = ['cn', 'hk', 'us', 'jp', 'kr'];
 const ACTION_OPTIONS: DecisionAction[] = ['buy', 'add', 'hold', 'reduce', 'sell', 'watch', 'avoid', 'alert'];
 const PHASE_OPTIONS: MarketPhaseValue[] = ['premarket', 'intraday', 'lunch_break', 'closing_auction', 'postmarket', 'non_trading', 'unknown'];
 const SOURCE_OPTIONS: DecisionSignalSourceType[] = ['analysis', 'agent', 'alert', 'market_review', 'manual'];
@@ -415,7 +420,7 @@ const DecisionSignalsPage: React.FC = () => {
             >
               <option value="">{t('decisionSignals.allMarkets')}</option>
               {MARKET_OPTIONS.map((market) => (
-                <option key={market} value={market}>{t(`decisionSignals.market.${market}` as UiTextKey)}</option>
+                <option key={market} value={market}>{getDecisionSignalMarketLabel(market, t)}</option>
               ))}
             </select>
             <input
@@ -443,7 +448,9 @@ const DecisionSignalsPage: React.FC = () => {
               aria-label={t('decisionSignals.marketPhase')}
             >
               <option value="">{t('decisionSignals.allPhases')}</option>
-              {PHASE_OPTIONS.map((phase) => <option key={phase} value={phase}>{phase}</option>)}
+              {PHASE_OPTIONS.map((phase) => (
+                <option key={phase} value={phase}>{getDecisionSignalMarketPhaseLabel(phase, t)}</option>
+              ))}
             </select>
             <select
               className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
@@ -452,7 +459,9 @@ const DecisionSignalsPage: React.FC = () => {
               aria-label={t('decisionSignals.source')}
             >
               <option value="">{t('decisionSignals.allSources')}</option>
-              {SOURCE_OPTIONS.map((source) => <option key={source} value={source}>{source}</option>)}
+              {SOURCE_OPTIONS.map((source) => (
+                <option key={source} value={source}>{getDecisionSignalSourceTypeLabel(source, t)}</option>
+              ))}
             </select>
             <select
               className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"

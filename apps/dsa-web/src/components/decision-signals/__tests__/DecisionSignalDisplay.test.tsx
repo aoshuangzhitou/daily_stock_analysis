@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../../types/decisionSignals';
-import { DecisionSignalCard, DecisionSignalDetails } from '../DecisionSignalDisplay';
+import { DecisionSignalCard, DecisionSignalDetails, PortfolioSignalSummary } from '../DecisionSignalDisplay';
 
 const signal: DecisionSignalItem = {
   id: 7,
@@ -55,6 +55,12 @@ describe('DecisionSignalCard', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看 贵州茅台 AI 建议详情' }));
 
     expect(onSelect).toHaveBeenCalledWith(signal);
+    expect(screen.getByText('周期: 3 日')).toBeInTheDocument();
+    expect(screen.getByText('计划质量: 完整')).toBeInTheDocument();
+    expect(screen.getByText('阶段: 盘中')).toBeInTheDocument();
+    expect(screen.queryByText('3d')).not.toBeInTheDocument();
+    expect(screen.queryByText('complete')).not.toBeInTheDocument();
+    expect(screen.queryByText('intraday')).not.toBeInTheDocument();
   });
 
   it('renders non-interactive cards without a details button', () => {
@@ -77,6 +83,10 @@ describe('DecisionSignalDetails', () => {
     const entryRange = screen.getByText('入场区间').closest('div');
     expect(entryRange).not.toBeNull();
     expect(entryRange as HTMLElement).toHaveTextContent('1680');
+    expect(screen.getByText('3 日')).toBeInTheDocument();
+    expect(screen.getByText('完整')).toBeInTheDocument();
+    expect(screen.getByText('盘中')).toBeInTheDocument();
+    expect(screen.queryByText('3d')).not.toBeInTheDocument();
   });
 
   it('renders opaque JSON fields without creating html nodes from their string values', () => {
@@ -146,9 +156,22 @@ describe('DecisionSignalDetails', () => {
     );
 
     expect(screen.getByText('后验结果')).toBeInTheDocument();
+    expect(screen.getAllByText('3 日').length).toBeGreaterThan(1);
     expect(screen.getByText('命中')).toBeInTheDocument();
     expect(screen.getByText('5%')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '无用' }));
     expect(onFeedbackSubmit).toHaveBeenCalledWith('not_useful');
+  });
+
+  it('renders portfolio signal horizon using the current UI language', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    render(
+      <UiLanguageProvider>
+        <PortfolioSignalSummary item={{ ...signal, horizon: '10d', action: 'sell', actionLabel: null }} />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByText('10 days')).toBeInTheDocument();
+    expect(screen.queryByText('10d')).not.toBeInTheDocument();
   });
 });
