@@ -68,7 +68,7 @@ Web 入口位于 `/decision-signals`：
 - market filter 已包含 `cn/hk/us/jp/kr`，P7 只补齐 `jp/kr` 的本地化标签，不改变筛选范围。
 - 详情抽屉展示动作、状态、评分、置信度、周期、计划质量、市场阶段、价格计划、风险、观察条件、证据、数据质量和 metadata。
 - Web 只能把信号标记为 `closed`、`invalidated` 或 `archived`，不提供 terminal 状态恢复为 active。
-- 报告页只在普通个股历史报告有 `recordId` 时读取该报告绑定的 `source_type=analysis` 信号；大盘复盘和无记录 ID 的报告不触发查询。
+- 报告页只在普通个股历史报告有 `recordId` 时读取该报告绑定的 `source_type=analysis` 信号；大盘复盘和无记录 ID 的报告不触发查询。历史报告内的详情抽屉会按当前选中的信号懒加载只读后验结果和用户反馈，sidecar 加载失败只影响详情内对应区块，不阻断报告主体展示。
 - 持仓页异步查询每个唯一持仓的 latest active 信号，单只查询失败只显示降级提示，不阻断组合快照或其他持仓信号。
 
 所有用户可见枚举必须使用 i18n 标签；技术 ID、股票代码、API 字段名、env key、URL 示例可以保留英文。
