@@ -353,6 +353,7 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `MARKET_REVIEW_COLOR_SCHEME` | Index change color style in market reviews: `green_up` = green gains/red losses (default), `red_up` = red gains/green losses | `green_up` |
 | `SCHEDULE_ENABLED` | Enable scheduled tasks | `false` |
 | `SCHEDULE_TIME` | Scheduled execution time | `18:00` |
+| `SCHEDULE_TIMES` | Multiple scheduled execution times, comma-separated; falls back to `SCHEDULE_TIME` when empty | empty |
 | `SCHEDULE_RUN_IMMEDIATELY` | Run once immediately when scheduler mode starts; when unset it keeps following the legacy `RUN_IMMEDIATELY` runtime override | `true` |
 | `RUN_IMMEDIATELY` | Run once immediately for non-scheduler startup; also acts as the legacy fallback when `SCHEDULE_RUN_IMMEDIATELY` is unset | `true` |
 | `LOG_DIR` | Log directory | `./logs` |
@@ -610,7 +611,9 @@ crontab -e
 
 > Note: Scheduled mode reloads the saved `STOCK_LIST` before each run. If you also pass `--stocks`, it will not pin future scheduled executions to the startup snapshot; use a normal one-off run when you want to analyze a temporary stock list.
 >
-> When the built-in scheduler is started via `python main.py --schedule`, `python main.py --serve --schedule`, or an equivalent local mode, saving a new `SCHEDULE_TIME` from the WebUI will rebind the daily job on the next scheduler poll without restarting the process. The previous trigger time is removed instead of being kept alongside the new one.
+> When the built-in scheduler is started via `python main.py --schedule` or an equivalent CLI-only mode, saving a new `SCHEDULE_TIME` / `SCHEDULE_TIMES` from the WebUI will rebind the daily jobs on the next scheduler poll without restarting the process. The previous trigger times are removed instead of being kept alongside the new ones. `python main.py --serve --schedule` is owned by the Web/API runtime scheduler, so long-running WebUI/API/Desktop processes start, stop, or rebuild the runtime scheduler after saving `SCHEDULE_ENABLED`, `SCHEDULE_TIME`, or `SCHEDULE_TIMES`.
+>
+> The Web/API runtime scheduler run-now endpoint only accepts a request when no analysis is already running; if an analysis is in progress, it returns a busy response instead of reporting a queued run.
 
 ### Market Phase Baseline (Issue #1386 P0)
 
@@ -1168,7 +1171,7 @@ Read paths lazily expire active signals whose `expires_at` has passed before lis
 
 These endpoints inherit the existing `/api/v1/*` admin authentication middleware: when `ADMIN_AUTH_ENABLED=true`, callers must send a valid admin session cookie. DecisionSignal does not add a separate auth scheme.
 
-#1390 P4 wires the existing `DecisionSignal` API into the Web UI without adding backend contracts, database tables, or configuration. The sidebar now includes an "AI signals" entry at `/decision-signals`; the page defaults to `status=active`, supports filtering by market, stock code, action, market phase, source, and status, and includes a latest-active lookup by stock code. Signal details show action, confidence/score, horizon, plan_quality, market_phase, price plan, risk, watch conditions, source report, and data quality. The Web UI only allows marking a signal as `closed`, `invalidated`, or `archived`; it does not restore terminal states to active.
+#1390 P4 wires the existing `DecisionSignal` API into the Web UI without adding backend contracts, database tables, or configuration. The sidebar "AI signals" entry at `/decision-signals` is the centralized query surface for structured decision signals; the page defaults to `status=active`, supports filtering by market, stock code, action, market phase, source, source report ID, and status, and includes a latest-active lookup by stock code. Signal details show action, confidence/score, horizon, plan_quality, market_phase, price plan, risk, watch conditions, source report, and data quality. The Web UI only allows marking a signal as `closed`, `invalidated`, or `archived`; it does not restore terminal states to active.
 
 #1390 P5 adds signal-level feedback, forward outcome evaluation, and stats sidecars. It does not extend the `decision_signals` main table and does not reuse `BacktestResult`, which is tied to `analysis_history_id`. `decision_signal_feedback` stores the latest `useful|not_useful` feedback per `signal_id` with optional reason/note/source. `decision_signal_outcomes` stores idempotent rows by `(signal_id, horizon, engine_version)`, currently `engine_version=decision-signal-v1`. Each outcome freezes `action/market/market_phase/source_type/source_agent/plan_quality/data_quality_level/holding_state` at evaluation time so historical stats are not rewritten by later live-join changes. Deleting history first finds `source_type=analysis` signals bound to the deleted history IDs, then removes their feedback/outcome sidecars.
 
@@ -1182,7 +1185,7 @@ The portfolio page loads AI signals as a non-blocking enhancement: portfolio sna
 
 #1390 P7 is documented in [DecisionSignal Topic](decision-signals.md) (Chinese-only). P7 adds no `DECISION_SIGNAL_*` configuration, database migration, API field, or runtime switch. Rollback is to revert the related code. After rollback, signal extraction and writes stop, while report saving, alert triggering, notification sending, and the portfolio risk main flow continue through their existing paths. Historical signal, feedback, and outcome rows are not deleted automatically.
 
-Regular stock history reports show `source_type=analysis` signals extracted from that report after the strategy block, using `source_report_id=<recordId>` as the query. Reports without a `recordId`, market reviews, and other non-regular stock reports do not issue this query. Empty results show a report-level empty state, and loading failures affect only that card, not the report body, news, diagnostics, or transparency sections.
+Regular stock history report details no longer embed the extracted `source_type=analysis` signals and no longer issue a `source_report_id=<recordId>` query when the report details open. To inspect structured AI recommendations, use `/decision-signals` and filter by source report ID, open the `/decision-signals?sourceReportId=<recordId>` deep link, or search by stock. When source report ID is filled or provided through that URL parameter, the Web UI sends an exact `source_type=analysis + source_report_id=<recordId>` query without adding default `status=active` or other list filters, preserving the best-effort lazy backfill semantics for older reports.
 
 ## Backtesting
 
