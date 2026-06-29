@@ -11,6 +11,7 @@ Covers:
 """
 import json
 import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -953,6 +954,455 @@ class TestAnalyzerGenerateText:
         assert len(dispatch_calls) == 2
         assert dispatch_calls[0]["stream"] is True
         assert "stream" not in dispatch_calls[1]
+
+    def test_call_litellm_hermes_route_forces_non_stream_direct_client(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/hermes-agent",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "openai/hermes-agent",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "sk-hermes-test-value",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                }
+            ],
+            llm_temperature=0.0,
+            generation_backend="litellm",
+            generation_fallback_backend="litellm",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="OK"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        seen_kwargs = {}
+
+        @contextmanager
+        def fake_no_proxy_client(**_kwargs):
+            yield object()
+
+        def fake_completion(**kwargs):
+            seen_kwargs.update(kwargs)
+            return response
+
+        with patch("src.analyzer.open_hermes_no_proxy_client", side_effect=fake_no_proxy_client), \
+             patch("src.analyzer.litellm.completion", side_effect=fake_completion):
+            text, model, _usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.0},
+                stream=True,
+            )
+
+        assert text == "OK"
+        assert model == "openai/hermes-agent"
+        assert seen_kwargs["model"] == "openai/hermes-agent"
+        assert seen_kwargs["stream"] is False
+        assert "api_key" not in seen_kwargs
+        assert "api_base" not in seen_kwargs
+        assert "client" in seen_kwargs
+
+    def test_call_litellm_hermes_failure_redacts_secret_from_logs_and_error(self, caplog):
+        from src.analyzer import _AllModelsFailedError
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/hermes-agent",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "openai/hermes-agent",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "saved-secret-token",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                }
+            ],
+            llm_temperature=0.0,
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+
+        @contextmanager
+        def fake_no_proxy_client(**_kwargs):
+            yield object()
+
+        caplog.set_level("WARNING", logger="src.analyzer")
+        with patch("src.analyzer.open_hermes_no_proxy_client", side_effect=fake_no_proxy_client), \
+             patch("src.analyzer.litellm.completion", side_effect=RuntimeError("upstream saw saved-secret-token")):
+            with pytest.raises(_AllModelsFailedError) as exc_info:
+                analyzer._call_litellm("prompt", {"max_tokens": 4})
+
+        assert "saved-secret-token" not in str(exc_info.value)
+        assert "saved-secret-token" not in caplog.text
+        assert "[REDACTED]" in str(exc_info.value)
+
+    def test_analyze_redacts_hermes_secret_from_final_error_result(self, caplog):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/hermes-agent",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "openai/hermes-agent",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "saved-secret-token",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                }
+            ],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+            llm_temperature=0.0,
+            report_integrity_enabled=False,
+            report_integrity_retry=0,
+            report_language="zh",
+            gemini_request_delay=0,
+        )
+        context = {"code": "600519", "stock_name": "贵州茅台"}
+
+        caplog.set_level("ERROR", logger="src.analyzer")
+        with patch.object(analyzer, "get_generation_backend_config_error", return_value=None), \
+             patch.object(analyzer, "is_available", return_value=True), \
+             patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
+             patch.object(analyzer, "_get_skill_prompt_sections", return_value=("", "", False)), \
+             patch.object(analyzer, "_format_prompt", return_value="prompt"), \
+             patch.object(analyzer, "_call_litellm", side_effect=RuntimeError("upstream saw saved-secret-token")):
+            result = analyzer.analyze(context)
+
+        assert result.success is False
+        assert "saved-secret-token" not in result.error_message
+        assert "saved-secret-token" not in result.analysis_summary
+        assert "saved-secret-token" not in result.risk_warning
+        assert "saved-secret-token" not in caplog.text
+        assert "[REDACTED]" in result.error_message
+
+    def test_generation_config_error_rejects_mixed_hermes_route(self):
+        from src.llm.generation_backend import GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._router = None
+        analyzer._litellm_available = False
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="shared-route",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "shared-route",
+                    "litellm_params": {
+                        "model": "hermes-agent",
+                        "api_key": "sk-hermes-test-value",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                },
+                {
+                    "model_name": "shared-route",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-openai-test-value",
+                    },
+                },
+            ],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+
+        error = analyzer.get_generation_backend_config_error()
+
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "mixed_hermes_route_unsupported"
+
+    def test_generation_config_error_rejects_bare_mixed_hermes_route(self):
+        from src.llm.generation_backend import GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="shared-route",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "openai/shared-route",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "sk-hermes-test-value",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                },
+                {
+                    "model_name": "openai/shared-route",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-openai-test-value",
+                    },
+                },
+            ],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+
+        error = analyzer.get_generation_backend_config_error()
+
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "mixed_hermes_route_unsupported"
+
+    def test_generation_config_error_rejects_mixed_hermes_fallback_route(self):
+        from src.llm.generation_backend import GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/gpt-4o-mini",
+            litellm_fallback_models=["shared-route"],
+            llm_model_list=[
+                {
+                    "model_name": "shared-route",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "sk-hermes-test-value",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                },
+                {
+                    "model_name": "shared-route",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-openai-test-value",
+                    },
+                },
+            ],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+
+        error = analyzer.get_generation_backend_config_error()
+
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "mixed_hermes_route_unsupported"
+        assert error.details["route_name"] == "shared-route"
+
+    def test_generation_config_error_rejects_bare_mixed_hermes_fallback_route(self):
+        from src.llm.generation_backend import GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/gpt-4o-mini",
+            litellm_fallback_models=["shared-route"],
+            llm_model_list=[
+                {
+                    "model_name": "openai/shared-route",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "sk-hermes-test-value",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                },
+                {
+                    "model_name": "openai/shared-route",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-openai-test-value",
+                    },
+                },
+            ],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[],
+            llm_blocks_legacy_fallback=False,
+        )
+
+        error = analyzer.get_generation_backend_config_error()
+
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "mixed_hermes_route_unsupported"
+
+    def test_invalid_hermes_with_valid_sibling_keeps_analyzer_available(self):
+        from src.config import Config
+        from src.analyzer import GeminiAnalyzer
+
+        env = {
+            "LLM_CHANNELS": "hermes,primary",
+            "LLM_PRIMARY_PROTOCOL": "openai",
+            "LLM_PRIMARY_BASE_URL": "https://example.invalid/v1",
+            "LLM_PRIMARY_API_KEY": "sk-primary-test-value",
+            "LLM_PRIMARY_MODELS": "gpt-sibling",
+            "OPENAI_API_KEY": "sk-openai-test-value",
+        }
+
+        with patch("src.config.setup_env"), \
+             patch.object(Config, "_parse_litellm_yaml", return_value=[]), \
+             patch.dict("os.environ", env, clear=True):
+            config = Config._load_from_env()
+            analyzer = GeminiAnalyzer(config=config)
+
+        assert config.litellm_model == "openai/gpt-sibling"
+        assert "hermes-agent" in config.llm_blocked_hermes_routes
+        assert "openai/hermes-agent" in config.llm_blocked_hermes_routes
+        assert analyzer.is_available() is True
+        assert analyzer.get_generation_backend_config_error() is None
+
+    def test_explicit_invalid_hermes_primary_with_valid_sibling_is_blocked_before_completion(self):
+        from src.config import Config
+        from src.analyzer import GeminiAnalyzer
+        from src.llm.generation_backend import GenerationError, GenerationErrorCode
+
+        env = {
+            "LLM_CHANNELS": "hermes,primary",
+            "LLM_HERMES_API_KEY": "hermes-key",
+            "LLM_HERMES_MODELS": "bad model",
+            "LLM_PRIMARY_PROTOCOL": "openai",
+            "LLM_PRIMARY_BASE_URL": "https://example.invalid/v1",
+            "LLM_PRIMARY_API_KEY": "sibling-key",
+            "LLM_PRIMARY_MODELS": "gpt-sibling",
+            "OPENAI_API_KEY": "legacy-key",
+            "LITELLM_MODEL": "bad model",
+        }
+
+        with patch("src.config.setup_env"), \
+             patch.object(Config, "_parse_litellm_yaml", return_value=[]), \
+             patch.dict("os.environ", env, clear=True):
+            config = Config._load_from_env()
+            analyzer = GeminiAnalyzer(config=config)
+
+        assert "bad model" in config.llm_blocked_hermes_routes
+        assert "openai/bad model" in config.llm_blocked_hermes_routes
+        error = analyzer.get_generation_backend_config_error()
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "explicit_hermes_route_invalid"
+        assert error.details["reason"] == "explicit_hermes_route_invalid"
+        assert error.details["field"] == "LITELLM_MODEL"
+        assert analyzer.is_available() is False
+
+        with patch("src.analyzer.litellm.completion") as completion:
+            with pytest.raises(GenerationError):
+                analyzer._call_litellm("prompt", {"max_tokens": 4})
+        completion.assert_not_called()
+
+    def test_explicit_invalid_hermes_fallback_with_valid_sibling_is_blocked_before_loop(self):
+        from src.config import Config
+        from src.analyzer import GeminiAnalyzer
+        from src.llm.generation_backend import GenerationError, GenerationErrorCode
+
+        env = {
+            "LLM_CHANNELS": "hermes,primary",
+            "LLM_HERMES_API_KEY": "hermes-key",
+            "LLM_HERMES_MODELS": "bad model",
+            "LLM_PRIMARY_PROTOCOL": "openai",
+            "LLM_PRIMARY_BASE_URL": "https://example.invalid/v1",
+            "LLM_PRIMARY_API_KEY": "sibling-key",
+            "LLM_PRIMARY_MODELS": "gpt-sibling",
+            "OPENAI_API_KEY": "legacy-key",
+            "LITELLM_MODEL": "openai/gpt-sibling",
+            "LITELLM_FALLBACK_MODELS": "bad model",
+        }
+
+        with patch("src.config.setup_env"), \
+             patch.object(Config, "_parse_litellm_yaml", return_value=[]), \
+             patch.dict("os.environ", env, clear=True):
+            config = Config._load_from_env()
+            analyzer = GeminiAnalyzer(config=config)
+
+        error = analyzer.get_generation_backend_config_error()
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "explicit_hermes_route_invalid"
+        assert error.details["field"] == "LITELLM_FALLBACK_MODELS"
+        assert analyzer.is_available() is False
+
+        with patch("src.analyzer.litellm.completion") as completion:
+            with pytest.raises(GenerationError):
+                analyzer._call_litellm("prompt", {"max_tokens": 4})
+        completion.assert_not_called()
+
+    @pytest.mark.parametrize("selected_model", ["anthropic/foo bad", "openai/anthropic/foo bad"])
+    def test_provider_looking_malformed_hermes_model_is_not_reinterpreted_as_direct_provider(self, selected_model):
+        from src.config import Config
+        from src.analyzer import GeminiAnalyzer
+        from src.llm.generation_backend import GenerationError
+
+        env = {
+            "LLM_CHANNELS": "hermes,primary",
+            "LLM_HERMES_API_KEY": "hermes-key",
+            "LLM_HERMES_MODELS": "anthropic/foo bad",
+            "LLM_PRIMARY_PROTOCOL": "openai",
+            "LLM_PRIMARY_BASE_URL": "https://example.invalid/v1",
+            "LLM_PRIMARY_API_KEY": "sibling-key",
+            "LLM_PRIMARY_MODELS": "gpt-sibling",
+            "ANTHROPIC_API_KEY": "anthropic-legacy-key",
+            "LITELLM_MODEL": selected_model,
+        }
+
+        with patch("src.config.setup_env"), \
+             patch.object(Config, "_parse_litellm_yaml", return_value=[]), \
+             patch.dict("os.environ", env, clear=True):
+            config = Config._load_from_env()
+            analyzer = GeminiAnalyzer(config=config)
+
+        error = analyzer.get_generation_backend_config_error()
+        assert error is not None
+        assert error.details["code"] == "explicit_hermes_route_invalid"
+        assert error.details["field"] == "LITELLM_MODEL"
+
+        with patch("src.analyzer.litellm.completion") as completion:
+            with pytest.raises(GenerationError):
+                analyzer._call_litellm("prompt", {"max_tokens": 4})
+        completion.assert_not_called()
+
+    def test_invalid_hermes_config_error_handles_canonicalize_value_error(self):
+        from src.llm.generation_backend import GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="bad hermes route",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+            generation_backend="litellm",
+            generation_fallback_backend="",
+            llm_channel_config_issues=[
+                {
+                    "field": "LLM_HERMES_MODELS",
+                    "code": "invalid_model",
+                    "message": "Hermes model IDs must be valid",
+                }
+            ],
+            llm_blocks_legacy_fallback=True,
+            llm_blocked_hermes_routes=["openai/hermes-agent"],
+        )
+
+        with patch("src.analyzer.canonicalize_hermes_model_ref", side_effect=ValueError("bad model")), \
+             patch("src.analyzer.litellm.completion") as completion:
+            error = analyzer.get_generation_backend_config_error()
+
+        assert error is not None
+        assert error.error_code is GenerationErrorCode.UNSAFE_CONFIG
+        assert error.details["code"] == "invalid_model"
+        completion.assert_not_called()
 
     @pytest.mark.parametrize(
         "provider_model,response_payload,expected_text",
@@ -2191,6 +2641,35 @@ class TestMarketAnalyzerBypassFix:
         assert "### 6. Strategy Framework" in result
         assert "### 一、市场总结" not in result
 
+    def test_generate_template_review_uses_jp_title_for_english_fallback(self):
+        from src.core.market_profile import JP_PROFILE
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.region = "jp"
+        ma.profile = JP_PROFILE
+        ma.strategy = get_market_strategy_blueprint("jp")
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code="N225",
+                    name="Nikkei 225",
+                    current=39000.0,
+                    change=120.0,
+                    change_pct=0.31,
+                )
+            ],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert "Japan Market Recap" in result
+        assert "Today's Japan market showed" in result
+        assert "A-share Market Recap" not in result
+
     def test_generate_template_review_keeps_chinese_shell_for_us_when_report_language_is_default(self):
         from src.core.market_profile import US_PROFILE
         from src.core.market_strategy import get_market_strategy_blueprint
@@ -2222,6 +2701,47 @@ class TestMarketAnalyzerBypassFix:
         assert "### 六、策略框架" in result
         assert "### 1. Market Summary" not in result
         assert "US Market Recap" not in result
+
+    @pytest.mark.parametrize(
+        ("region", "profile_name", "index_code", "index_name", "english_title", "zh_label"),
+        [
+            ("jp", "JP_PROFILE", "N225", "Nikkei 225", "Japan Market Recap", "今日日股市场整体呈现"),
+            ("kr", "KR_PROFILE", "KS11", "KOSPI", "Korea Market Recap", "今日韩股市场整体呈现"),
+        ],
+    )
+    def test_generate_template_review_uses_jp_kr_labels_for_no_llm_fallback(
+        self, region, profile_name, index_code, index_name, english_title, zh_label
+    ):
+        import src.core.market_profile as market_profile
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.region = region
+        ma.profile = getattr(market_profile, profile_name)
+        ma.strategy = get_market_strategy_blueprint(region)
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code=index_code,
+                    name=index_name,
+                    current=30000.0,
+                    change=120.0,
+                    change_pct=0.4,
+                )
+            ],
+        )
+
+        ma.config.report_language = "en"
+        english_result = ma.generate_market_review(overview, [])
+        assert f"## 2026-03-05 {english_title}" in english_result
+        assert "A-share Market Recap" not in english_result
+
+        ma.config.report_language = "zh"
+        zh_result = ma.generate_market_review(overview, [])
+        assert zh_label in zh_result
+        assert "今日A股市场整体呈现" not in zh_result
 
     def test_inject_data_into_review_matches_english_headings(self):
         from src.market_analyzer import MarketOverview, MarketIndex
@@ -2532,6 +3052,36 @@ Sector text.
         snapshot = ma.build_market_light_snapshot(overview)
 
         assert snapshot["region"] == "us"
+        assert snapshot["data_quality"] == "partial"
+        assert snapshot["dimensions"]["breadth"] == {"score": 50, "available": False}
+        assert snapshot["dimensions"]["index"]["available"] is True
+        assert snapshot["dimensions"]["limit"] == {"score": 50, "available": False}
+
+    @pytest.mark.parametrize(
+        ("region", "profile_name", "index_code", "index_name"),
+        [
+            ("jp", "JP_PROFILE", "N225", "Nikkei 225"),
+            ("kr", "KR_PROFILE", "KS11", "KOSPI"),
+        ],
+    )
+    def test_market_light_snapshot_accepts_jp_kr_regions(
+        self, region, profile_name, index_code, index_name
+    ):
+        import src.core.market_profile as market_profile
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = region
+        ma.profile = getattr(market_profile, profile_name)
+        overview = MarketOverview(
+            date="2026-03-06",
+            indices=[MarketIndex(code=index_code, name=index_name, current=30000, change_pct=0.5)],
+        )
+
+        snapshot = ma.build_market_light_snapshot(overview)
+
+        assert snapshot["region"] == region
+        assert snapshot["trade_date"] == "2026-03-06"
         assert snapshot["data_quality"] == "partial"
         assert snapshot["dimensions"]["breadth"] == {"score": 50, "available": False}
         assert snapshot["dimensions"]["index"]["available"] is True
