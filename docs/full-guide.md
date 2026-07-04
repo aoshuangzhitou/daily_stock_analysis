@@ -77,6 +77,8 @@ daily_stock_analysis/
 | `FEISHU_WEBHOOK_URL` | 飞书 Webhook URL | 可选 |
 | `FEISHU_WEBHOOK_SECRET` | 飞书 Webhook 签名密钥（开启“签名校验”时必填） | 可选 |
 | `FEISHU_WEBHOOK_KEYWORD` | 飞书 Webhook 关键词（开启“关键词”时必填） | 可选 |
+| `DINGTALK_WEBHOOK_URL` | 钉钉群机器人 Webhook URL | 可选 |
+| `DINGTALK_SECRET` | 钉钉群机器人加签密钥 (SEC开头) | 可选 |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（@BotFather 获取） | 可选 |
 | `TELEGRAM_CHAT_ID` | Telegram Chat ID | 可选 |
 | `TELEGRAM_MESSAGE_THREAD_ID` | Telegram Topic ID (用于发送到子话题) | 可选 |
@@ -267,6 +269,8 @@ daily_stock_analysis/
 | `ANTHROPIC_MAX_TOKENS` | Claude 响应最大 token 数 | `8192` | 可选 |
 
 > GitHub Actions 说明：仓库自带 `00-daily-analysis.yml` 在 `GENERATION_FALLBACK_BACKEND` 未配置时显式使用 `litellm`，避免未设置的 Secret/Variable 被导出为空值并意外禁用 backend fallback。若要在 Actions 中禁用 backend fallback，请将 fallback 设为 primary backend，让 resolver 走 self no-op。
+
+> 生成后端状态说明：Web 设置页的快速检查只读取已保存配置、未保存草稿，并检查本地 CLI 可执行文件是否可见，不发起真实模型请求；JSON 冒烟测试是单独的显式操作，会使用服务端固定的 JSON 提示词和 schema 发起一次真实请求。`health_status` 与 `last_error_code/message` 只表示本次状态计算或冒烟测试结果，不是历史持久健康状态。
 
 > *注：`ANSPIRE_API_KEYS`、`AIHUBMIX_KEY`、`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 或 `OLLAMA_API_BASE` 至少配置一个。`ANSPIRE_API_KEYS` 与 `AIHUBMIX_KEY` 无需配置 `OPENAI_BASE_URL`，系统自动适配。
 

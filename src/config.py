@@ -74,7 +74,7 @@ from src.scheduler import normalize_schedule_times
 logger = logging.getLogger(__name__)
 
 DEFAULT_ALPHASIFT_INSTALL_SPEC = (
-    "git+https://github.com/ZhuLinsen/alphasift.git@0a7b9cd59e81718f851890535241bc105d4ddc64"
+    "git+https://github.com/ZhuLinsen/alphasift.git@9f522747caafd3c0b1ddb7e14d5cf44c8580b6cf"
 )
 
 
@@ -869,6 +869,8 @@ class Config:
     feishu_webhook_url: Optional[str] = None
     feishu_webhook_secret: Optional[str] = None  # 自定义机器人签名密钥（可选）
     feishu_webhook_keyword: Optional[str] = None  # 自定义机器人关键词（可选）
+    dingtalk_webhook_url: Optional[str] = None
+    dingtalk_secret: Optional[str] = None
 
     # 飞书应用机器人（App Bot）通知
     feishu_chat_id: Optional[str] = None  # 目标群会话 chat_id（群聊模式），或用户 open_id（P2P 模式）
@@ -1786,6 +1788,9 @@ class Config:
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             feishu_webhook_secret=os.getenv('FEISHU_WEBHOOK_SECRET'),
             feishu_webhook_keyword=os.getenv('FEISHU_WEBHOOK_KEYWORD'),
+            dingtalk_webhook_url=os.getenv('DINGTALK_WEBHOOK_URL'),
+            dingtalk_secret=os.getenv('DINGTALK_SECRET'),
+            
 
             feishu_chat_id=os.getenv('FEISHU_CHAT_ID'),
             feishu_receive_id_type=os.getenv('FEISHU_RECEIVE_ID_TYPE', 'chat_id'),
@@ -3133,6 +3138,7 @@ class Config:
         for field, value in (
             ("WECHAT_WEBHOOK_URL", self.wechat_webhook_url),
             ("FEISHU_WEBHOOK_URL", self.feishu_webhook_url),
+            ("DINGTALK_WEBHOOK_URL", self.dingtalk_webhook_url),
             ("DISCORD_WEBHOOK_URL", self.discord_webhook_url),
             ("SLACK_WEBHOOK_URL", self.slack_webhook_url),
             ("ASTRBOT_URL", self.astrbot_url),
