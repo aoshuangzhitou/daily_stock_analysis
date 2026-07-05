@@ -68,6 +68,7 @@ from datetime import date, datetime, timezone, timedelta
 from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
+from src.services.stock_list_parser import split_stock_list
 from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
 
 
@@ -1283,7 +1284,7 @@ def main() -> int:
     if args.stocks:
         stock_codes = [
             resolve_index_stock_code_for_analysis(c)
-            for c in args.stocks.split(',')
+            for c in split_stock_list(args.stocks)
             if (c or "").strip()
         ]
         logger.info(f"使用命令行指定的股票列表: {stock_codes}")
