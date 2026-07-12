@@ -385,9 +385,7 @@ def get_stock_bar(
                     action=action_fields["action"],
                     action_label=action_fields["action_label"],
                     analysis_count=analysis_count,
-                    last_analysis_time=(
-                        record.created_at.isoformat() if record.created_at else None
-                    ),
+                    last_analysis_time=service._serialize_created_at(record.created_at),
                     model_used=normalize_model_used(model_used),
                     market_phase_summary=service._display_market_phase_summary(
                         record.code,
