@@ -337,7 +337,7 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `REALTIME_SOURCE_PRIORITY` | Real-time quote source priority (comma-separated), e.g., `tencent,akshare_sina,efinance,akshare_em`; add `tickflow` explicitly to use TickFlow realtime quotes | See .env.example | Optional |
 | `ENABLE_FUNDAMENTAL_PIPELINE` | Master switch for fundamental aggregation; when disabled, returns `not_supported` block only, without altering the original analysis pipeline. | `true` | Optional |
 | `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS` | Total latency budget for the fundamental stage (seconds) | `8.0` | Optional |
-| `FUNDAMENTAL_FETCH_TIMEOUT_SECONDS` | Timeout for a single capability source call (seconds) | `3.0` | Optional |
+| `FUNDAMENTAL_FETCH_TIMEOUT_SECONDS` | Timeout for a single capability source call; market-structure industry/concept rankings share this budget | `8.0` | Optional |
 | `FUNDAMENTAL_RETRY_MAX` | Retry count for fundamental capabilities (including the first attempt) | `1` | Optional |
 | `FUNDAMENTAL_CACHE_TTL_SECONDS` | Fundamental aggregation cache TTL (seconds), short cache to reduce repeated API pulling. | `120` | Optional |
 | `FUNDAMENTAL_CACHE_MAX_ENTRIES` | Maximum entries for fundamental cache (evicted by time within TTL) | `256` | Optional |
@@ -391,6 +391,7 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 > - TickFlow daily K-line range requests pass explicit `start_time` / `end_time` / `count`. Because the official quickstart documents that time-range queries are still limited by `count`, non-empty count-capped responses whose first returned trading date is later than the requested start trading date are rejected before normalization or cache writes, allowing manager fallback to continue.
 > - Batch analysis can warm the per-process TickFlow daily K-line cache through `prefetch_daily_klines()` before per-stock `get_daily_data()` calls. Only validated frames are cached; batch permission failures are negative-cached and degrade to single-stock requests or existing providers.
 > - TickFlow behavior is capability-based rather than just key-based: limited plans can still enhance main CN indices, while plans with `CN_Equity_A` universe query support also enhance market breadth and stock-list/name lookups.
+> - TickFlow can derive SW1 industry rankings from its industry universes and full A-share quotes, and participates first in the market-structure industry fallback. Concept-theme rankings still use the existing AkShare / Tushare / Efinance chain.
 > - The official quickstart documents `quotes.get(universes=["CN_Equity_A"])`, but online smoke tests confirmed two additional real-world constraints: universe access depends on plan permissions, and `quotes.get(symbols=[...])` has a per-request symbol limit.
 > - TickFlow currently returns `change_pct` / `amplitude` / `turnover_rate` as ratio values; this integration normalizes them to the project's percent convention so they match AkShare / Tushare / efinance semantics.
 > - In scheduler mode, if runtime env explicitly sets `RUN_IMMEDIATELY` but does not set `SCHEDULE_RUN_IMMEDIATELY`, the scheduler keeps inheriting the legacy runtime override instead of being pulled back to a persisted `.env` alias value.
@@ -764,6 +765,16 @@ P6 is a documentation and configuration-visibility closure only. It does not add
 `SAVE_CONTEXT_SNAPSHOT` is an existing environment variable; P6 only exposes it through `.env.example`, the config registry, and Web settings help. It defaults to `true`. When set to `false`, or when the CLI uses `--no-context-snapshot`, new history records no longer persist the full `analysis_history.context_snapshot`, including `enhanced_context`, `market_phase_summary`, `analysis_context_pack_overview`, diagnostic snapshots, and raw snapshot fields. This setting does not disable current-run `AnalysisContextPack` construction, does not remove the low-sensitivity `analysis_context_pack_summary` from prompts, and does not change report JSON schemas or API request parameters.
 
 There is no runtime pack master switch. Disabling the P3-P5 pack prompt summary, overview, or data-quality integration requires a release rollback or code rollback. Older history records without `analysis_context_pack_overview` / `data_quality` continue to return empty fields and remain readable.
+
+### Market Structure Context (Issue #1909)
+
+Stock analysis now builds a low-sensitivity `market_structure_context` and exposes it as `AnalysisReport.details.market_structure` in history detail, sync analysis responses, and completed task status responses. The contract has two layers: `market_theme_context` for the market/theme layer, and `stock_market_position` for the individual stock's position inside those themes.
+
+The first version is DSA-native: it uses `DataFetcherManager.get_sector_rankings()`, `get_concept_rankings()`, and `fundamental_context.belong_boards`. It does not require AlphaSift at runtime. AlphaSift hotspot details, route timelines, constituents, and leader stocks can be migrated later as optional sources; until then, missing constituent/leader evidence is explicit and the stock role stays conservative (`follower`, `edge`, or `unknown`). Non-A-share markets return `not_supported`.
+
+Compatibility boundary: provider/model snapshot fields in this change (including `model_used` and market structure source provider markers) are display/history metadata only. They do not participate in runtime provider routing, `base URL`, model selection, `.env` config cleanup, or migration/overwrite logic.
+
+Regular LLM, single Agent, and multi-agent prompts receive the low-sensitivity summary. DecisionSignal extraction writes `primary_theme`, `theme_phase`, `stock_role`, contract versions, and risk tags into metadata without changing primary fields or deduplication keys. The Web report page shows a market-position card after the overview; older reports without this field simply omit the card.
 
 ### Intraday Decision Guardrails and Quality Checks (Issue #1386 P5)
 
@@ -1341,6 +1352,7 @@ FastAPI provides RESTful API service for configuration management and triggering
 - **Market Review visibility** - After clicking Market Review, the API returns a `task_id` and the UI polls `GET /api/v1/analysis/status/{task_id}` to show progress; completed/failure states are rendered explicitly and failure messages are shown directly in the UI error area.
 - **Market review history dedicated entry** - Market review history is shown in a dedicated history entry and isolated from regular stock history; use `stock_code=MARKET` and `report_type=market_review` to view and replay only market-review records.
 - **Market review history replay** - Market review results are persisted with `report_type=market_review` and can be reopened from history list/detail or Markdown endpoints directly, without re-triggering a fresh analysis run.
+- **Market-position card** - A-share stock reports show a market theme layer and a stock position layer, separating market themes, primary theme, theme phase, stock role, and missing evidence.
 - **Input data-block visibility** - Regular analysis reports expose a low-sensitivity `AnalysisContextPack` overview through history details, sync responses, and completed task status; the Web report page shows the data-block summary collapsed after Strategy and News, with block status, source, missing reasons, and fallback summaries available on expansion.
 - **Ask-stock follow-up context** - When Ask Stock is opened from a historical report, follow-up messages keep sending the active `stock_code/stock_name`; reopening an existing chat can recover the base stock from loaded user messages, and comparison-style prompts do not overwrite the current stock context.
 - **Backtest Validation** - Evaluate historical analysis accuracy, query direction win rate and simulated returns
