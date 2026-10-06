@@ -19,6 +19,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
+from functools import partial
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
@@ -1222,6 +1223,7 @@ class ScreeningService:
         _ensure_supported_market(market)
         _ensure_supported_strategy(strategy)
 
+        candidate_context_cache: Dict[str, Dict[str, Any]] = {}
         try:
             raw = _call_screening_screen(
                 strategy,
@@ -1230,6 +1232,7 @@ class ScreeningService:
                 self.config,
                 selection_seed=selection_seed,
                 progress_callback=progress_callback,
+                candidate_context_cache=candidate_context_cache,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -1268,7 +1271,7 @@ class ScreeningService:
             92,
             "正在补充入选股票的新闻与事件",
         )
-        selected, dsa_enrichment = _enrich_candidates_with_dsa(selected)
+        selected, dsa_enrichment = _enrich_candidates_with_dsa(selected, candidate_context_cache=candidate_context_cache)
         selected = [
             _attach_candidate_explanations(
                 candidate,
@@ -1283,6 +1286,9 @@ class ScreeningService:
             "candidate_count": len(selected),
             "run_id": raw_data.get("run_id") or uuid.uuid4().hex,
             "strategy": raw_data.get("strategy") or strategy,
+            "strategy_version": raw_data.get("strategy_version") or "",
+            "strategy_category": raw_data.get("strategy_category") or "",
+            "effective_factor_weights": _valid_nonnegative_factor_weights(raw_data.get("effective_factor_weights")),
             "market": raw_data.get("market") or market,
             "snapshot_count": raw_data.get("snapshot_count"),
             "snapshot_source": raw_data.get("snapshot_source") or "",
@@ -1748,13 +1754,19 @@ def _call_screening_screen(
     *,
     selection_seed: str = "",
     progress_callback: Callable[[int, str], None] | None = None,
+    candidate_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Any:
     # Environment bridging is process-global, so keep it brief: materialize an
     # immutable pipeline config while holding the lock, then release it before
     # any network or LLM work. Hotspot refreshes can then run alongside screening.
     with _screening_runtime_env(config, max_results=max_results):
         pipeline_config = ScreeningPipelineConfig.from_env()
-        pipeline_context = _build_screening_context(config, max_results=max_results)
+        pipeline_context = _build_screening_context(
+            config,
+            max_results=max_results,
+            include_news=pipeline_config.has_llm_config(),
+            candidate_context_cache=candidate_context_cache,
+        )
 
     daily_history_fetcher = _build_screening_dsa_daily_history_fetcher()
     with _screening_litellm_headers(config):
@@ -1801,6 +1813,7 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
     """
     try:
         daily_module = importlib.import_module("src.services.screening.daily")
+        from pandas import isna
     except Exception:
         return None
 
@@ -1817,6 +1830,7 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
         cache_dir: str | Path | None = None,
         cache_ttl_seconds: float | None = None,
     ) -> Any:
+        stale_dsa_history = None
         try:
             dsa_df, dsa_source = get_dsa_daily_history(code, lookback_days=lookback_days)
             normalized = _normalize_dsa_daily_history(dsa_df)
@@ -1833,7 +1847,13 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
                 normalized.attrs["daily_source_order_notes"] = []
                 normalized.attrs["source_errors"] = []
                 normalized.attrs["daily_source_health"] = {}
-                if cache_dir is not None:
+                if daily_module.daily_history_is_stale(normalized, code=normalized_code):
+                    normalized.attrs["daily_stale"] = True
+                    if not isna(daily_module._latest_daily_bar_date(normalized, code=normalized_code)):
+                        stale_dsa_history = normalized
+                    else:
+                        raise ValueError("invalid daily session")
+                elif cache_dir is not None:
                     cache_path_builder = getattr(daily_module, "_daily_history_cache_path", None)
                     cache_writer = getattr(daily_module, "_write_daily_history_cache", None)
                     if callable(cache_path_builder) and callable(cache_writer):
@@ -1850,7 +1870,8 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
                             source=source,
                             lookback_days=int(lookback_days),
                         )
-                return normalized
+                if stale_dsa_history is None:
+                    return normalized
         except Exception as exc:
             logger.warning(
                 "Screening DSA daily history fetch failed for %s; falling back to Screening source %s: %s",
@@ -1858,14 +1879,38 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
                 source,
                 exc,
             )
-        return original_fetch(
-            code,
-            lookback_days=lookback_days,
-            source=source,
-            retries=retries,
-            cache_dir=cache_dir,
-            cache_ttl_seconds=cache_ttl_seconds,
-        )
+        try:
+            native_history = original_fetch(
+                code,
+                lookback_days=lookback_days,
+                source=source,
+                retries=retries,
+                cache_dir=cache_dir,
+                cache_ttl_seconds=cache_ttl_seconds,
+            )
+            if (
+                stale_dsa_history is not None
+                and daily_module.daily_history_is_stale(native_history, code=code)
+                and not (
+                    isna(daily_module._latest_daily_bar_date(stale_dsa_history, code=code))
+                    or daily_module._latest_daily_bar_date(native_history, code=code)
+                    > daily_module._latest_daily_bar_date(stale_dsa_history, code=code)
+                )
+            ):
+                for key in ("source_errors", "daily_source_order", "daily_source_order_notes", "daily_source_health"):
+                    if key in native_history.attrs:
+                        stale_dsa_history.attrs[key] = native_history.attrs[key]
+                return stale_dsa_history
+            return native_history
+        except RuntimeError as exc:
+            if stale_dsa_history is None:
+                raise
+            metadata = getattr(exc, "daily_metadata", {})
+            stale_dsa_history.attrs.update(metadata)
+            if "source_errors" not in metadata:
+                stale_dsa_history.attrs["source_errors"] = [str(exc)]
+            logger.warning("Screening uses stale DSA daily history for %s: %s", code, exc)
+            return stale_dsa_history
 
     return fetch_daily_history_with_dsa
 
@@ -2947,11 +2992,26 @@ class DsaEastMoneyHotspotProvider:
         return records
 
 
-def _build_screening_context(config: Config, *, max_results: Optional[int] = None) -> Dict[str, Any]:
+def _build_screening_context(
+    config: Config,
+    *,
+    max_results: Optional[int] = None,
+    include_news: bool = False,
+    candidate_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     # context.llm.model/fallback/model_list 与 LiteLLM 路由语义保持一致，
     # 参见 https://docs.litellm.ai/docs/proxy/configs#the-model_list-key
     channels = _normalize_dsa_llm_channels(config)
     litellm_model, fallback_models = _resolve_screening_llm_models(config)
+    candidate_getter = (
+        partial(
+            get_dsa_candidate_context,
+            include_news=True,
+            mode="pre_rank_research",
+            candidate_context_cache=candidate_context_cache,
+        )
+        if include_news else get_dsa_candidate_context
+    )
     return {
         "llm": {
             "model": litellm_model,
@@ -2966,10 +3026,10 @@ def _build_screening_context(config: Config, *, max_results: Optional[int] = Non
         },
         "dsa": {
             "contract_version": "1",
-            "mode": "pre_rank_light",
+            "mode": "pre_rank_research" if include_news else "pre_rank_light",
             "max_candidates": DSA_PRE_RANK_CONTEXT_MAX_CANDIDATES,
-            "include_news": False,
-            "news_max_results": 0,
+            "include_news": include_news,
+            "news_max_results": 3 if include_news else 0,
             "capabilities": [
                 "candidate_context",
                 "daily_history",
@@ -2977,7 +3037,7 @@ def _build_screening_context(config: Config, *, max_results: Optional[int] = Non
                 "fundamental_context",
                 "stock_events",
             ],
-            "get_candidate_context": get_dsa_candidate_context,
+            "get_candidate_context": candidate_getter,
             "get_daily_history": get_dsa_daily_history,
             "get_realtime_quote": get_dsa_realtime_quote,
             "get_fundamental_context": get_dsa_fundamental_context,
@@ -3313,7 +3373,7 @@ def _normalize_dsa_daily_history(raw_df: Any) -> Any:
 
     import pandas as pd
 
-    df = pd.DataFrame(raw_df).copy()
+    df = raw_df.copy() if isinstance(raw_df, pd.DataFrame) else pd.DataFrame(raw_df)
     if df.empty:
         return df
 
@@ -3327,6 +3387,7 @@ def _normalize_dsa_daily_history(raw_df: Any) -> Any:
         "amount": ("amount", "成交额"),
     }
     normalized = pd.DataFrame(index=df.index)
+    normalized.attrs.update(df.attrs)
     for target, candidates in aliases.items():
         source_column = next((column for column in candidates if column in df.columns), None)
         if source_column is not None:
@@ -3411,6 +3472,9 @@ def _normalize_dsa_search_response(response: Any, *, max_results: int) -> Dict[s
                 "url": getattr(item, "url", ""),
                 "source": getattr(item, "source", ""),
                 "published_date": getattr(item, "published_date", None),
+                # Preserve upstream fetch time; normalization may read cached
+                # results and must not mark them as retrieved just now.
+                "retrieved_at": getattr(item, "retrieved_at", None),
             }
         )
     return _remove_non_finite_json_values(
@@ -3431,6 +3495,7 @@ def get_dsa_candidate_context(
     include_news: bool = False,
     include_fundamentals: bool = True,
     mode: str = "pre_rank_light",
+    candidate_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     candidate = {"code": stock_code, "name": stock_name, "raw": {}}
     context = _build_dsa_candidate_context(
@@ -3440,10 +3505,16 @@ def get_dsa_candidate_context(
         include_fundamentals=include_fundamentals,
         profile=mode or "pre_rank_light",
     )
+    if candidate_context_cache is not None:
+        candidate_context_cache[_env_text(stock_code)] = {**context, "name": candidate.get("name") or stock_name}
     return context.get("dsa_context", {})
 
 
-def _enrich_candidates_with_dsa(candidates: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def _enrich_candidates_with_dsa(
+    candidates: List[Dict[str, Any]],
+    *,
+    candidate_context_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     enriched_count = 0
     warnings: List[str] = []
     limit = min(len(candidates), DSA_ENRICHMENT_MAX_CANDIDATES)
@@ -3451,14 +3522,24 @@ def _enrich_candidates_with_dsa(candidates: List[Dict[str, Any]]) -> Tuple[List[
     for index, candidate in enumerate(candidates):
         if index >= limit:
             continue
+        cached = (candidate_context_cache or {}).get(_env_text(candidate.get("code")))
+        cached_context = cached.get("dsa_context") if isinstance(cached, dict) else None
+        reuse_current_run = (
+            isinstance(cached_context, dict)
+            and cached_context.get("news_included") is True
+            and cached_context.get("events_included") is True
+        )
+        if reuse_current_run:
+            candidate.update(cached)
         existing_context = candidate.get("dsa_context")
-        if (
+        has_recent_context = (
             isinstance(existing_context, dict)
             and existing_context.get("enriched")
             and _candidate_has_dsa_news(candidate)
             and _has_recent_dsa_evidence(candidate.get("dsa_events") or _extract_dsa_events_from_context(existing_context))
-        ):
-            enriched_count += 1
+        )
+        if reuse_current_run or has_recent_context:
+            enriched_count += int(bool(existing_context.get("enriched")))
             existing_warnings = existing_context.get("warnings") or []
             if isinstance(existing_warnings, list):
                 warnings.extend(str(item) for item in existing_warnings if item)
@@ -3885,6 +3966,10 @@ def _strategy_factor_weights(
 
 
 def _valid_positive_factor_weights(value: Any) -> Dict[str, float]:
+    return {factor: weight for factor, weight in _valid_nonnegative_factor_weights(value).items() if weight > 0}
+
+
+def _valid_nonnegative_factor_weights(value: Any) -> Dict[str, float]:
     if not isinstance(value, dict):
         return {}
     return {
@@ -3892,7 +3977,7 @@ def _valid_positive_factor_weights(value: Any) -> Dict[str, float]:
         for factor, weight in value.items()
         if isinstance(weight, (int, float))
         and math.isfinite(float(weight))
-        and float(weight) > 0
+        and float(weight) >= 0
     }
 
 
